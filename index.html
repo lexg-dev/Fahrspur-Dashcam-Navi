@@ -117,6 +117,29 @@
   }
   body.swap-view #map-toggle{display:none;}
 
+  /* Drag & minimize controls for whichever panel is currently the small inset */
+  #inset-controls{
+    position:fixed; z-index:36; display:flex; gap:4px;
+    background:rgba(11,13,16,.75); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:10px; padding:3px;
+    touch-action:none;
+  }
+  #inset-grip, #inset-min{
+    width:24px; height:24px; border-radius:7px; border:none;
+    background:transparent; color:var(--text); font-size:13px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #inset-grip{cursor:grab; touch-action:none;}
+  #inset-restore{
+    display:none; position:fixed; z-index:36;
+    width:44px; height:44px; border-radius:50%;
+    background:rgba(20,23,28,.85); backdrop-filter:blur(6px);
+    border:1px solid var(--amber); color:var(--amber); font-size:18px;
+    right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+  }
+  #inset-restore.show{display:flex; align-items:center; justify-content:center;}
+  .inset-hidden{display:none !important;}
+
   /* Turn banner */
   #turn-banner{
     position:fixed; top:calc(env(safe-area-inset-top) + 62px); left:16px; right:16px;
@@ -234,6 +257,21 @@
   #route-summary-actions{display:flex; gap:4px;}
   #route-edit{color:var(--teal); font-family:inherit; background:none; border:none; font-size:12px; padding:4px;}
   #route-clear{color:var(--danger); font-family:inherit; background:none; border:none; font-size:12px; padding:4px;}
+
+  #status-bar{
+    display:flex; flex-wrap:wrap; gap:6px;
+    margin:0 2px 12px; padding:0;
+  }
+  .status-badge{
+    display:flex; align-items:center; gap:6px;
+    background:rgba(20,23,28,.62); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:10px;
+    padding:6px 10px; font-size:12.5px; color:var(--text); white-space:nowrap;
+  }
+  .status-badge .sb-icon{font-size:13px; line-height:1;}
+  .status-badge.sb-rec{border-color:var(--danger); color:var(--danger);}
+  .status-badge.sb-warn{border-color:var(--amber); color:var(--amber);}
+  .status-badge.sb-ok{color:var(--teal);}
 
   #controls-row{display:flex; align-items:center; justify-content:center; gap:22px;}
   .icon-btn{
@@ -371,6 +409,12 @@
   <div id="map"></div>
 </div>
 
+<div id="inset-controls">
+  <span id="inset-grip" title="Verschieben">⠿</span>
+  <button id="inset-min" title="Minimieren">–</button>
+</div>
+<button id="inset-restore" title="Wiederherstellen">🗖</button>
+
 <div id="traffic-key-sheet">
   <div id="traffic-key-panel">
     <h2>TomTom-Zugang</h2>
@@ -402,6 +446,7 @@
       <button id="route-clear">Beenden</button>
     </span>
   </div>
+  <div id="status-bar"></div>
   <div id="controls-row">
     <button class="icon-btn" id="mic-btn" title="Mikrofon">🎙️</button>
     <button id="rec-btn" title="Aufnahme"><div class="core"></div></button>
@@ -445,7 +490,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.6.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -515,7 +560,10 @@
 
       initMap();
       requestAnimationFrame(drawLoop);
+      requestWakeLock();
+      updateStatusBar();
       el('permission-gate').style.display = 'none';
+      setTimeout(syncInsetControls, 50);
     } catch (err) {
       el('permission-error').textContent = 'Zugriff verweigert oder nicht verfügbar: ' + err.message + '. Diese Seite muss über HTTPS laufen (nicht als lokale Datei geöffnet).';
     }
@@ -525,12 +573,17 @@
   el('mic-btn').addEventListener('click', () => {
     micEnabled = !micEnabled;
     el('mic-btn').classList.toggle('active', micEnabled);
+    updateStatusBar();
   });
 
   // ---------- Geolocation ----------
+  const NAV_ZOOM = 17; // "Straße voraus"-Zoomstufe während aktiver Navigation
+  let isNavigating = false;
+
   function onPosition(p){
-    const { latitude, longitude, speed } = p.coords;
+    const { latitude, longitude, speed, accuracy } = p.coords;
     lastPos = { lat: latitude, lon: longitude };
+    lastGpsAccuracy = (typeof accuracy === 'number') ? accuracy : null;
     if (typeof speed === 'number' && speed !== null && !isNaN(speed)) {
       currentSpeedKmh = Math.max(0, speed * 3.6);
     }
@@ -538,9 +591,13 @@
 
     if (map && meMarker) {
       meMarker.setLatLng([latitude, longitude]);
-      if (!map.__userMoved) map.setView([latitude, longitude], map.getZoom());
+      if (!map.__userMoved) {
+        const targetZoom = isNavigating ? Math.max(map.getZoom(), NAV_ZOOM) : map.getZoom();
+        map.setView([latitude, longitude], targetZoom);
+      }
     }
     checkRouteProgress();
+    updateStatusBar();
   }
   function onPosError(){ el('speed-val').textContent = '--'; }
 
@@ -556,7 +613,7 @@
 
   el('map-toggle').addEventListener('click', () => {
     el('map-wrap').classList.toggle('expanded');
-    setTimeout(() => map.invalidateSize(), 260);
+    setTimeout(() => { map.invalidateSize(); syncInsetControls(); }, 260);
   });
 
   // ---------- Traffic (TomTom, optional API key) ----------
@@ -611,6 +668,7 @@
     refreshIncidents(true);
     incidentTimer = setInterval(() => refreshIncidents(true), 45000);
     map.on('moveend', onMoveEndRefresh);
+    updateStatusBar();
   }
 
   function onMoveEndRefresh(){ refreshIncidents(false); }
@@ -623,6 +681,7 @@
     el('traffic-toggle').classList.remove('on');
     clearInterval(incidentTimer);
     map.off('moveend', onMoveEndRefresh);
+    updateStatusBar();
   }
 
   async function refreshIncidents(force){
@@ -774,6 +833,8 @@
       el('dist-val').textContent = (route.distance / 1000).toFixed(1) + ' km';
       map.__userMoved = false;
       el('search-fields').classList.add('hidden');
+      isNavigating = true;
+      map.setView([lastPos.lat, lastPos.lon], NAV_ZOOM);
     } catch (e) {
       el('turn-text').textContent = 'Routing fehlgeschlagen (Verbindung prüfen).';
     }
@@ -854,6 +915,7 @@
   el('route-clear').addEventListener('click', () => {
     if (routeLine) map.removeLayer(routeLine);
     routeSteps = []; nextStepIndex = 0;
+    isNavigating = false;
     el('route-summary').classList.remove('show');
     el('turn-banner').classList.remove('show');
     el('dest-input').value = '';
@@ -945,6 +1007,49 @@
     const mm = String(Math.floor(s/60)).padStart(2,'0');
     const ss = String(s%60).padStart(2,'0');
     el('timer').textContent = `${mm}:${ss}`;
+    updateStatusBar();
+  }
+
+  let lastGpsAccuracy = null;
+
+  function updateStatusBar(){
+    const bar = el('status-bar');
+    if (!bar) return;
+    const badges = [];
+
+    if (recording) {
+      const s = Math.floor((Date.now() - recStartTime) / 1000);
+      const mm = String(Math.floor(s/60)).padStart(2,'0');
+      const ss = String(s%60).padStart(2,'0');
+      badges.push(`<div class="status-badge sb-rec"><span class="sb-icon">●</span>REC ${mm}:${ss}</div>`);
+    } else {
+      badges.push(`<div class="status-badge"><span class="sb-icon">○</span>Bereit</div>`);
+    }
+
+    if (loopMinutes > 0) {
+      badges.push(`<div class="status-badge sb-ok"><span class="sb-icon">🔁</span>Loop ${loopMinutes} Min</div>`);
+    }
+
+    let gpsClass = 'sb-warn', gpsText = 'Kein GPS';
+    if (lastPos) {
+      if (lastGpsAccuracy != null && lastGpsAccuracy <= 20) { gpsClass = 'sb-ok'; gpsText = 'GPS stark'; }
+      else if (lastGpsAccuracy != null && lastGpsAccuracy <= 50) { gpsClass = ''; gpsText = 'GPS ok'; }
+      else { gpsClass = 'sb-warn'; gpsText = 'GPS schwach'; }
+    }
+    badges.push(`<div class="status-badge ${gpsClass}"><span class="sb-icon">📍</span>${gpsText}</div>`);
+
+    badges.push(`<div class="status-badge"><span class="sb-icon">🎙️</span>Mikro ${micEnabled ? 'an' : 'aus'}</div>`);
+
+    if (typeof trafficOn !== 'undefined' && trafficOn) {
+      badges.push(`<div class="status-badge sb-ok"><span class="sb-icon">🚦</span>Verkehr an</div>`);
+    }
+
+    if (clips && clips.length) {
+      const totalMb = clips.reduce((sum, c) => sum + c.blob.size, 0) / 1024 / 1024;
+      badges.push(`<div class="status-badge"><span class="sb-icon">🎞️</span>${clips.length} Clip${clips.length > 1 ? 's' : ''} · ${totalMb.toFixed(0)} MB</div>`);
+    }
+
+    bar.innerHTML = badges.join('');
   }
 
   function handleSegmentStop(){
@@ -967,6 +1072,7 @@
       }
     }
     renderClipsList();
+    updateStatusBar();
 
     if (continueAfterStop) {
       continueAfterStop = false;
@@ -1006,8 +1112,78 @@
   // ---------- View swap (Kamera ↔ Karte) ----------
   el('swap-btn').addEventListener('click', () => {
     document.body.classList.toggle('swap-view');
-    setTimeout(() => { if (map) map.invalidateSize(); }, 260);
+    setTimeout(() => { if (map) map.invalidateSize(); syncInsetControls(); }, 260);
   });
+
+  // ---------- Inset panel: verschieben & minimieren ----------
+  const mapWrapEl = el('map-wrap');
+  const insetControls = el('inset-controls');
+  const insetGrip = el('inset-grip');
+  const insetMinBtn = el('inset-min');
+  const insetRestoreBtn = el('inset-restore');
+
+  function getInsetTargets(){
+    return document.body.classList.contains('swap-view') ? [cameraEl.parentElement, canvas] : [mapWrapEl];
+  }
+
+  function syncInsetControls(){
+    const targets = getInsetTargets();
+    const box = targets[0];
+    if (!box || box.classList.contains('inset-hidden')) return;
+    const r = box.getBoundingClientRect();
+    insetControls.style.left = r.left + 'px';
+    insetControls.style.top = Math.max(4, r.top - 32) + 'px';
+  }
+
+  let insetDragging = false, dragStartX = 0, dragStartY = 0, dragOriginLeft = 0, dragOriginTop = 0;
+
+  insetGrip.addEventListener('touchstart', e => {
+    const targets = getInsetTargets();
+    const box = targets[0];
+    const r = box.getBoundingClientRect();
+    insetDragging = true;
+    dragStartX = e.touches[0].clientX;
+    dragStartY = e.touches[0].clientY;
+    dragOriginLeft = r.left;
+    dragOriginTop = r.top;
+  }, { passive: true });
+
+  insetGrip.addEventListener('touchmove', e => {
+    if (!insetDragging) return;
+    const dx = e.touches[0].clientX - dragStartX;
+    const dy = e.touches[0].clientY - dragStartY;
+    let newLeft = dragOriginLeft + dx;
+    let newTop = dragOriginTop + dy;
+    newLeft = Math.max(4, Math.min(window.innerWidth - 60, newLeft));
+    newTop = Math.max(4, Math.min(window.innerHeight - 60, newTop));
+
+    getInsetTargets().forEach(t => {
+      if (!t) return;
+      t.style.left = newLeft + 'px';
+      t.style.top = newTop + 'px';
+      t.style.right = 'auto';
+      t.style.bottom = 'auto';
+    });
+    syncInsetControls();
+  }, { passive: true });
+
+  insetGrip.addEventListener('touchend', () => { insetDragging = false; });
+
+  insetMinBtn.addEventListener('click', () => {
+    getInsetTargets().forEach(t => t && t.classList.add('inset-hidden'));
+    insetControls.style.display = 'none';
+    insetRestoreBtn.classList.add('show');
+  });
+
+  insetRestoreBtn.addEventListener('click', () => {
+    getInsetTargets().forEach(t => t && t.classList.remove('inset-hidden'));
+    insetControls.style.display = 'flex';
+    insetRestoreBtn.classList.remove('show');
+    syncInsetControls();
+    if (map) map.invalidateSize();
+  });
+
+  window.addEventListener('resize', syncInsetControls);
 
   // ---------- Camera & recording settings ----------
   el('settings-btn').addEventListener('click', async () => {
@@ -1114,7 +1290,6 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') requestWakeLock();
   });
-  requestWakeLock();
 
 })();
 </script>
