@@ -37,11 +37,12 @@
   /* Top HUD */
   #hud-top{
     position:fixed; top:0; left:0; right:0;
-    padding:calc(env(safe-area-inset-top) + 14px) 16px 10px;
-    display:flex; align-items:center; justify-content:space-between;
-    background:linear-gradient(to bottom, rgba(0,0,0,.65), transparent);
-    z-index:20; pointer-events:none;
+    padding:calc(env(safe-area-inset-top) + 10px) 12px 8px;
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:linear-gradient(to bottom, rgba(0,0,0,.7), transparent);
+    z-index:30; pointer-events:none;
   }
+  #hud-top-left, #hud-top-right{display:flex; align-items:center; gap:6px; pointer-events:auto;}
   .rec-chip{
     display:flex; align-items:center; gap:8px;
     background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
@@ -59,18 +60,35 @@
   #speed-chip{
     background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
     border:1px solid var(--line); border-radius:999px;
-    padding:6px 14px; text-align:right;
+    padding:6px 12px; text-align:right;
   }
-  #speed-val{font-size:16px; font-weight:700; color:var(--amber);}
-  #speed-unit{font-size:11px; color:var(--text-dim); margin-left:4px;}
+  #speed-val{font-size:15px; font-weight:700; color:var(--amber);}
+  #speed-unit{font-size:10px; color:var(--text-dim); margin-left:3px;}
 
-  #hud-top-right{display:flex; align-items:center; gap:8px; pointer-events:auto;}
   .hud-icon-btn{
-    width:34px; height:34px; border-radius:50%;
+    position:relative;
+    width:32px; height:32px; border-radius:50%;
     background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
-    border:1px solid var(--line); color:var(--text); font-size:15px;
+    border:1px solid var(--line); color:var(--text); font-size:14px;
     display:flex; align-items:center; justify-content:center;
   }
+  .hud-icon-btn.on{border-color:var(--amber); color:var(--amber);}
+  #clips-count-badge{
+    position:absolute; top:-4px; right:-4px; min-width:15px; height:15px; padding:0 3px;
+    border-radius:999px; background:var(--teal); color:#062b28;
+    font-size:9px; font-weight:700; line-height:15px; text-align:center;
+    font-family:'JetBrains Mono', monospace; display:none;
+  }
+  #clips-count-badge.show{display:block;}
+
+  #rec-btn-top{
+    width:38px; height:38px; border-radius:50%;
+    background:var(--panel); border:2px solid var(--text);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  #rec-btn-top .core{width:14px; height:14px; border-radius:5px; background:var(--danger); transition:all .2s ease;}
+  #rec-btn-top.recording .core{border-radius:4px; width:12px; height:12px;}
+  #rec-btn-top.recording{border-color:var(--danger);}
 
   #camera-settings-sheet{
     position:fixed; inset:0; z-index:60; display:none;
@@ -80,7 +98,7 @@
   #camera-settings-sheet.show{display:flex;}
   #camera-settings-panel{
     background:var(--panel); border:1px solid var(--line); border-radius:18px;
-    padding:20px; width:100%; max-width:360px;
+    padding:20px; width:100%; max-width:360px; max-height:80vh; overflow-y:auto;
   }
   #camera-settings-panel h2{font-size:16px; margin:0 0 14px; display:flex; align-items:baseline; gap:8px;}
   #app-version-tag{font-size:11px; font-weight:400; color:var(--text-dim); font-family:'JetBrains Mono', monospace;}
@@ -125,43 +143,24 @@
     right:auto; bottom:auto; border-radius:0; z-index:1;
   }
   body.swap-view #map-toggle{display:none;}
-
-  /* Drag & minimize controls for whichever panel is currently the small inset */
-  #inset-controls{
-    position:fixed; z-index:36; display:flex; gap:4px;
-    background:rgba(11,13,16,.75); backdrop-filter:blur(6px);
-    border:1px solid var(--line); border-radius:10px; padding:3px;
-    touch-action:none;
-  }
-  #inset-grip, #inset-min{
-    width:24px; height:24px; border-radius:7px; border:none;
-    background:transparent; color:var(--text); font-size:13px;
-    display:flex; align-items:center; justify-content:center;
-  }
-  #inset-grip{cursor:grab; touch-action:none;}
-  #inset-restore{
-    display:none; position:fixed; z-index:36;
-    width:44px; height:44px; border-radius:50%;
-    background:rgba(20,23,28,.85); backdrop-filter:blur(6px);
-    border:1px solid var(--amber); color:var(--amber); font-size:18px;
-    right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
-  }
-  #inset-restore.show{display:flex; align-items:center; justify-content:center;}
   .inset-hidden{display:none !important;}
 
-  /* Turn banner */
+  /* Turn banner — mittig oben, wie bei Google Maps */
   #turn-banner{
-    position:fixed; top:calc(env(safe-area-inset-top) + 104px); left:16px; right:16px;
-    z-index:20; display:none;
-    background:rgba(20,23,28,.82); backdrop-filter:blur(8px);
+    position:fixed; top:calc(env(safe-area-inset-top) + 60px);
+    left:50%; transform:translateX(-50%);
+    width:min(78%, 320px);
+    z-index:22; display:none;
+    background:rgba(20,23,28,.88); backdrop-filter:blur(8px);
     border:1px solid var(--line); border-left:3px solid var(--teal);
-    border-radius:14px; padding:12px 14px;
-    align-items:center; gap:12px;
+    border-radius:14px; padding:10px 12px;
+    align-items:center; gap:10px;
+    box-shadow:0 6px 18px rgba(0,0,0,.4);
   }
   #turn-banner.show{display:flex;}
-  #turn-icon{font-size:26px; width:32px; text-align:center; flex-shrink:0;}
-  #turn-text{font-size:15px; line-height:1.3;}
-  #turn-dist{font-size:12px; color:var(--text-dim); margin-top:2px;}
+  #turn-icon{font-size:22px; width:26px; text-align:center; flex-shrink:0;}
+  #turn-text{font-size:13.5px; line-height:1.3;}
+  #turn-dist{font-size:11px; color:var(--text-dim); margin-top:2px;}
 
   /* Map inset */
   #map-wrap{
@@ -245,41 +244,6 @@
   }
   #route-start.following{background:var(--panel-2); color:var(--teal); border:1px solid var(--teal);}
 
-  #status-bar{
-    position:fixed; z-index:19;
-    top:calc(env(safe-area-inset-top) + 58px); left:16px; right:16px;
-    display:flex; flex-wrap:wrap; gap:6px;
-  }
-  .status-badge{
-    display:flex; align-items:center; gap:6px;
-    background:rgba(20,23,28,.62); backdrop-filter:blur(6px);
-    border:1px solid var(--line); border-radius:10px;
-    padding:6px 10px; font-size:12.5px; color:var(--text); white-space:nowrap;
-  }
-  .status-badge .sb-icon{font-size:13px; line-height:1;}
-  .status-badge.sb-rec{border-color:var(--danger); color:var(--danger);}
-  .status-badge.sb-warn{border-color:var(--amber); color:var(--amber);}
-  .status-badge.sb-ok{color:var(--teal);}
-
-  #controls-row{display:flex; align-items:center; justify-content:center; gap:22px;}
-  .icon-btn{
-    width:52px; height:52px; border-radius:50%;
-    background:rgba(20,23,28,.72); backdrop-filter:blur(6px);
-    border:1px solid var(--line); color:var(--text);
-    display:flex; align-items:center; justify-content:center; font-size:19px;
-  }
-  .icon-btn.active{border-color:var(--amber); color:var(--amber);}
-  #rec-btn{
-    width:74px; height:74px; border-radius:50%;
-    background:var(--panel); border:3px solid var(--text);
-    display:flex; align-items:center; justify-content:center;
-  }
-  #rec-btn .core{
-    width:30px; height:30px; border-radius:8px; background:var(--danger);
-    transition:all .2s ease;
-  }
-  #rec-btn.recording .core{border-radius:6px; width:26px; height:26px;}
-
   /* Clips drawer */
   #clips-sheet{
     position:fixed; inset:0; z-index:40; display:none;
@@ -342,22 +306,29 @@
 </div>
 
 <div id="hud-top">
-  <div class="rec-chip">
-    <div class="rec-dot" id="recDot"></div>
-    <span id="timer" class="mono">00:00</span>
+  <div id="hud-top-left">
+    <div class="rec-chip">
+      <div class="rec-dot" id="recDot"></div>
+      <span id="timer" class="mono">00:00</span>
+    </div>
+    <button class="hud-icon-btn" id="clips-btn" title="Aufnahmen">🎞️<span id="clips-count-badge"></span></button>
   </div>
   <div id="hud-top-right">
     <button class="hud-icon-btn" id="swap-btn" title="Ansicht tauschen">⇄</button>
-    <button class="hud-icon-btn" id="settings-btn" title="Kamera-Einstellungen">⚙</button>
+    <button class="hud-icon-btn" id="inset-toggle-btn" title="Kleines Fenster ein-/ausblenden">🗖</button>
+    <button class="hud-icon-btn" id="settings-btn" title="Einstellungen">⚙</button>
+    <button id="rec-btn-top" title="Aufnahme"><div class="core"></div></button>
     <div id="speed-chip"><span id="speed-val" class="mono">--</span><span id="speed-unit">km/h</span></div>
   </div>
 </div>
 
-<div id="status-bar"></div>
-
 <div id="camera-settings-sheet">
   <div id="camera-settings-panel">
-    <h2>Kamera & Aufnahme <span id="app-version-tag"></span></h2>
+    <h2>Einstellungen <span id="app-version-tag"></span></h2>
+    <label class="cs-toggle-row">
+      <span>Mikrofon bei Aufnahme</span>
+      <input type="checkbox" id="settings-mic-enable" checked />
+    </label>
     <label class="cs-label">Kamera</label>
     <select id="camera-select"></select>
     <label class="cs-label">Auflösung</label>
@@ -394,7 +365,6 @@
 </div>
 
 <div id="turn-banner">
-
   <div id="turn-icon">↑</div>
   <div>
     <div id="turn-text">Route berechnen...</div>
@@ -406,12 +376,6 @@
   <button id="map-toggle">⤢</button>
   <div id="map"></div>
 </div>
-
-<div id="inset-controls">
-  <span id="inset-grip" title="Verschieben">⠿</span>
-  <button id="inset-min" title="Minimieren">–</button>
-</div>
-<button id="inset-restore" title="Wiederherstellen">🗖</button>
 
 <div id="hud-bottom">
   <div id="search-fields">
@@ -434,11 +398,6 @@
       </span>
     </div>
     <button id="route-start">▶ Navigation starten</button>
-  </div>
-  <div id="controls-row">
-    <button class="icon-btn" id="mic-btn" title="Mikrofon">🎙️</button>
-    <button id="rec-btn" title="Aufnahme"><div class="core"></div></button>
-    <button class="icon-btn" id="clips-btn" title="Aufnahmen">🎞️</button>
   </div>
 </div>
 
@@ -478,7 +437,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '1.7.0';
+  const APP_VERSION = '2.0.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -534,7 +493,7 @@
       await openCamera(null, recRes);
       try {
         micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch(e){ micStream = null; micEnabled = false; el('mic-btn').classList.remove('active'); }
+      } catch(e){ micStream = null; micEnabled = false; }
 
       fitCanvas();
       const supportedFormats = detectSupportedFormats();
@@ -549,19 +508,11 @@
       initMap();
       requestAnimationFrame(drawLoop);
       requestWakeLock();
-      updateStatusBar();
+      updateClipsBadge();
       el('permission-gate').style.display = 'none';
-      setTimeout(syncInsetControls, 50);
     } catch (err) {
       el('permission-error').textContent = 'Zugriff verweigert oder nicht verfügbar: ' + err.message + '. Diese Seite muss über HTTPS laufen (nicht als lokale Datei geöffnet).';
     }
-  });
-
-  el('mic-btn').classList.add('active');
-  el('mic-btn').addEventListener('click', () => {
-    micEnabled = !micEnabled;
-    el('mic-btn').classList.toggle('active', micEnabled);
-    updateStatusBar();
   });
 
   // ---------- Geolocation ----------
@@ -585,7 +536,6 @@
       }
     }
     checkRouteProgress();
-    updateStatusBar();
   }
   function onPosError(){ el('speed-val').textContent = '--'; }
 
@@ -608,7 +558,7 @@
 
   el('map-toggle').addEventListener('click', () => {
     el('map-wrap').classList.toggle('expanded');
-    setTimeout(() => { map.invalidateSize(); syncInsetControls(); }, 260);
+    setTimeout(() => { map.invalidateSize(); }, 260);
   });
 
   // ---------- Traffic (TomTom, optional API key) — verwaltet über ⚙ Einstellungen ----------
@@ -637,7 +587,6 @@
     refreshIncidents(true);
     incidentTimer = setInterval(() => refreshIncidents(true), 45000);
     map.on('moveend', onMoveEndRefresh);
-    updateStatusBar();
   }
 
   function onMoveEndRefresh(){ refreshIncidents(false); }
@@ -649,7 +598,6 @@
     trafficOn = false;
     clearInterval(incidentTimer);
     map.off('moveend', onMoveEndRefresh);
-    updateStatusBar();
   }
 
   async function refreshIncidents(force){
@@ -931,7 +879,7 @@
   let segmentTimer = null, continueAfterStop = false, loopMinutes = 0, segmentLengthMinutes = 5;
   let clips = []; // { id, url, blob, name, time }
 
-  el('rec-btn').addEventListener('click', () => {
+  el('rec-btn-top').addEventListener('click', () => {
     recording ? stopRecording() : startRecording();
   });
 
@@ -959,7 +907,7 @@
 
     recording = true;
     recStartTime = Date.now();
-    el('rec-btn').classList.add('recording');
+    el('rec-btn-top').classList.add('recording');
     el('recDot').classList.add('live');
     timerInterval = setInterval(updateTimer, 500);
 
@@ -985,49 +933,17 @@
     const mm = String(Math.floor(s/60)).padStart(2,'0');
     const ss = String(s%60).padStart(2,'0');
     el('timer').textContent = `${mm}:${ss}`;
-    updateStatusBar();
   }
 
-  let lastGpsAccuracy = null;
-
-  function updateStatusBar(){
-    const bar = el('status-bar');
-    if (!bar) return;
-    const badges = [];
-
-    if (recording) {
-      const s = Math.floor((Date.now() - recStartTime) / 1000);
-      const mm = String(Math.floor(s/60)).padStart(2,'0');
-      const ss = String(s%60).padStart(2,'0');
-      badges.push(`<div class="status-badge sb-rec"><span class="sb-icon">●</span>REC ${mm}:${ss}</div>`);
-    } else {
-      badges.push(`<div class="status-badge"><span class="sb-icon">○</span>Bereit</div>`);
-    }
-
-    if (loopMinutes > 0) {
-      badges.push(`<div class="status-badge sb-ok"><span class="sb-icon">🔁</span>Loop ${loopMinutes} Min</div>`);
-    }
-
-    let gpsClass = 'sb-warn', gpsText = 'Kein GPS';
-    if (lastPos) {
-      if (lastGpsAccuracy != null && lastGpsAccuracy <= 20) { gpsClass = 'sb-ok'; gpsText = 'GPS stark'; }
-      else if (lastGpsAccuracy != null && lastGpsAccuracy <= 50) { gpsClass = ''; gpsText = 'GPS ok'; }
-      else { gpsClass = 'sb-warn'; gpsText = 'GPS schwach'; }
-    }
-    badges.push(`<div class="status-badge ${gpsClass}"><span class="sb-icon">📍</span>${gpsText}</div>`);
-
-    badges.push(`<div class="status-badge"><span class="sb-icon">🎙️</span>Mikro ${micEnabled ? 'an' : 'aus'}</div>`);
-
-    if (typeof trafficOn !== 'undefined' && trafficOn) {
-      badges.push(`<div class="status-badge sb-ok"><span class="sb-icon">🚦</span>Verkehr an</div>`);
-    }
-
+  function updateClipsBadge(){
+    const badge = el('clips-count-badge');
+    if (!badge) return;
     if (clips && clips.length) {
-      const totalMb = clips.reduce((sum, c) => sum + c.blob.size, 0) / 1024 / 1024;
-      badges.push(`<div class="status-badge"><span class="sb-icon">🎞️</span>${clips.length} Clip${clips.length > 1 ? 's' : ''} · ${totalMb.toFixed(0)} MB</div>`);
+      badge.textContent = clips.length;
+      badge.classList.add('show');
+    } else {
+      badge.classList.remove('show');
     }
-
-    bar.innerHTML = badges.join('');
   }
 
   function handleSegmentStop(){
@@ -1050,14 +966,14 @@
       }
     }
     renderClipsList();
-    updateStatusBar();
+    updateClipsBadge();
 
     if (continueAfterStop) {
       continueAfterStop = false;
       startSegmentRecorder();
     } else {
       recording = false;
-      el('rec-btn').classList.remove('recording');
+      el('rec-btn-top').classList.remove('recording');
       el('recDot').classList.remove('live');
       clearInterval(timerInterval);
       clearInterval(segmentTimer);
@@ -1086,91 +1002,29 @@
   // ---------- Clips sheet ----------
   el('clips-btn').addEventListener('click', () => el('clips-sheet').classList.add('show'));
 
-
   // ---------- View swap (Kamera ↔ Karte) ----------
   el('swap-btn').addEventListener('click', () => {
     document.body.classList.toggle('swap-view');
-    // Manuell verschobene Positionen zurücksetzen, damit die CSS-Regeln
-    // für Vollbild/Inset nach dem Tauschen wieder greifen
-    [el('map-wrap'), cameraEl.parentElement, canvas].forEach(t => {
-      if (!t) return;
-      t.style.left = '';
-      t.style.top = '';
-      t.style.right = '';
-      t.style.bottom = '';
-    });
-    setTimeout(() => { if (map) map.invalidateSize(); syncInsetControls(); }, 260);
+    setTimeout(() => {
+      if (map) map.invalidateSize();
+      const nowHidden = getInsetTargets()[0].classList.contains('inset-hidden');
+      el('inset-toggle-btn').classList.toggle('on', nowHidden);
+    }, 260);
   });
 
-  // ---------- Inset panel: verschieben & minimieren ----------
+  // ---------- Inset panel: einfach ein-/ausblenden ----------
   const mapWrapEl = el('map-wrap');
-  const insetControls = el('inset-controls');
-  const insetGrip = el('inset-grip');
-  const insetMinBtn = el('inset-min');
-  const insetRestoreBtn = el('inset-restore');
 
   function getInsetTargets(){
     return document.body.classList.contains('swap-view') ? [cameraEl.parentElement, canvas] : [mapWrapEl];
   }
 
-  function syncInsetControls(){
-    const targets = getInsetTargets();
-    const box = targets[0];
-    if (!box || box.classList.contains('inset-hidden')) return;
-    const r = box.getBoundingClientRect();
-    insetControls.style.left = r.left + 'px';
-    insetControls.style.top = Math.max(4, r.top - 32) + 'px';
-  }
-
-  let insetDragging = false, dragStartX = 0, dragStartY = 0, dragOriginLeft = 0, dragOriginTop = 0;
-
-  insetGrip.addEventListener('touchstart', e => {
-    const targets = getInsetTargets();
-    const box = targets[0];
-    const r = box.getBoundingClientRect();
-    insetDragging = true;
-    dragStartX = e.touches[0].clientX;
-    dragStartY = e.touches[0].clientY;
-    dragOriginLeft = r.left;
-    dragOriginTop = r.top;
-  }, { passive: true });
-
-  insetGrip.addEventListener('touchmove', e => {
-    if (!insetDragging) return;
-    const dx = e.touches[0].clientX - dragStartX;
-    const dy = e.touches[0].clientY - dragStartY;
-    let newLeft = dragOriginLeft + dx;
-    let newTop = dragOriginTop + dy;
-    newLeft = Math.max(4, Math.min(window.innerWidth - 60, newLeft));
-    newTop = Math.max(4, Math.min(window.innerHeight - 60, newTop));
-
-    getInsetTargets().forEach(t => {
-      if (!t) return;
-      t.style.left = newLeft + 'px';
-      t.style.top = newTop + 'px';
-      t.style.right = 'auto';
-      t.style.bottom = 'auto';
-    });
-    syncInsetControls();
-  }, { passive: true });
-
-  insetGrip.addEventListener('touchend', () => { insetDragging = false; });
-
-  insetMinBtn.addEventListener('click', () => {
-    getInsetTargets().forEach(t => t && t.classList.add('inset-hidden'));
-    insetControls.style.display = 'none';
-    insetRestoreBtn.classList.add('show');
+  el('inset-toggle-btn').addEventListener('click', () => {
+    const hidden = getInsetTargets()[0].classList.contains('inset-hidden');
+    getInsetTargets().forEach(t => t && t.classList.toggle('inset-hidden', !hidden));
+    el('inset-toggle-btn').classList.toggle('on', !hidden);
+    if (hidden && map) map.invalidateSize();
   });
-
-  insetRestoreBtn.addEventListener('click', () => {
-    getInsetTargets().forEach(t => t && t.classList.remove('inset-hidden'));
-    insetControls.style.display = 'flex';
-    insetRestoreBtn.classList.remove('show');
-    syncInsetControls();
-    if (map) map.invalidateSize();
-  });
-
-  window.addEventListener('resize', syncInsetControls);
 
   // ---------- Camera & recording settings ----------
   el('settings-btn').addEventListener('click', async () => {
@@ -1184,6 +1038,7 @@
     el('loop-select').value = String(loopMinutes);
     el('settings-traffic-key').value = getTomTomKey();
     el('settings-traffic-enable').checked = trafficOn;
+    el('settings-mic-enable').checked = micEnabled;
     el('camera-settings-sheet').classList.add('show');
   });
   el('camera-settings-cancel').addEventListener('click', () => el('camera-settings-sheet').classList.remove('show'));
@@ -1240,6 +1095,7 @@
     const formats = formatSelect.__formats || detectSupportedFormats();
     const format = formats[parseInt(formatSelect.value, 10)] || formats[0];
     const newLoopMinutes = parseInt(loopSelect.value, 10) || 0;
+    micEnabled = el('settings-mic-enable').checked;
 
     el('camera-settings-apply').textContent = 'Wird angewendet...';
     try {

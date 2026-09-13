@@ -4,6 +4,44 @@ Alle nennenswerten Änderungen an diesem Projekt werden hier festgehalten.
 Format angelehnt an [Keep a Changelog](https://keepachangelog.com/),
 Versionierung nach [SemVer](https://semver.org/).
 
+## [2.0.0] — Oberfläche neu strukturiert
+### Geändert (Breaking: komplett neue Bedienoberfläche)
+- **Eine einzige Titelleiste oben** statt verteilter Bedienelemente:
+  links Aufnahme-Status + Timer + Clips-Knopf (mit Anzahl-Badge), rechts
+  Ansicht-Tauschen, Kleines-Fenster ein-/ausblenden, Einstellungen,
+  **Aufnahme-Knopf** (jetzt oben statt unten) und Geschwindigkeit
+- Mikrofon-Umschalter aus der unteren Leiste entfernt, liegt jetzt als
+  Schalter im ⚙-Menü ("Mikrofon bei Aufnahme")
+- Untere Bedienleiste (Mikro/Aufnahme/Clips) komplett entfernt — unten
+  bleiben nur noch Start-/Zielsuche und die Routenzusammenfassung
+- Abbiege-Hinweis-Banner sitzt jetzt mittig oben (wie bei Google Maps)
+  und ist schmaler statt über die volle Breite
+- Verschieben/Minimieren des kleinen Kamera-/Kartenfensters per Ziehgriff
+  ersetzt durch einen einfachen Ein-/Ausblenden-Knopf in der Titelleiste
+  (zuverlässiger, keine hängenbleibenden Positionen mehr)
+### Entfernt
+- Die separate Statusleiste (GPS-Signal, Mikrofon-Status, Verkehr-an,
+  Loop-Info) wurde ersatzlos gestrichen zugunsten der aufgeräumten
+  Titelleiste; Aufnahme-Status und Clip-Anzahl sind weiterhin sichtbar
+
+## [1.7.0] — Verkehrs-Einstellungen, Zoom, Navigationsfluss
+### Geändert
+- TomTom-Verkehrseinstellungen (Key + An/Aus) vom kaum sichtbaren
+  🚦-Symbol auf der Karte ins ⚙-Einstellungsmenü verschoben
+- **Navigationsfluss zweigeteilt** (Route berechnen → Übersicht ansehen →
+  Navigation starten), statt sofort in die Fahransicht zu springen:
+  1. "Los" berechnet die Route und zeigt sie komplett (Gesamtübersicht)
+  2. Neuer Button "▶ Navigation starten" zentriert danach auf die
+     aktuelle Position, zoomt auf Fahr-Ansicht und aktiviert das
+     automatische Nachführen
+  3. Bei manuellem Verschieben der Karte während der Navigation wird das
+     Nachführen pausiert; derselbe Button dient dann als "Zentrieren"
+### Hinzugefügt
+- Sichtbare Zoom-Knöpfe (+/−) auf der Karte (unten rechts)
+### Behoben
+- Routenberechnung zoomte sofort auf Fahransicht und überschrieb damit
+  die Gesamtübersicht der berechneten Route
+
 ## [1.6.1] — Fixes
 ### Behoben
 - Ansicht-Tauschen (⇄) funktionierte nicht mehr, nachdem das Inset einmal
