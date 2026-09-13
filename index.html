@@ -85,6 +85,7 @@
   #camera-settings-panel h2{font-size:16px; margin:0 0 14px; display:flex; align-items:baseline; gap:8px;}
   #app-version-tag{font-size:11px; font-weight:400; color:var(--text-dim); font-family:'JetBrains Mono', monospace;}
   .cs-label{display:block; font-size:12px; color:var(--text-dim); margin:12px 0 6px;}
+  .cs-hint{font-size:11px; color:var(--text-dim); line-height:1.4; margin:8px 0 0;}
   #camera-settings-panel select{
     width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
     padding:10px 12px; color:var(--text); font-family:inherit; font-size:14px;
@@ -190,14 +191,30 @@
     padding:10px 16px calc(env(safe-area-inset-bottom) + 14px);
     background:linear-gradient(to top, rgba(0,0,0,.75), transparent);
   }
-  #start-row{margin-bottom:8px;}
+  #search-fields{display:block;}
+  #search-fields.hidden{display:none;}
+  #start-row{margin-bottom:8px; position:relative;}
   #start-input{
     width:100%; background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
     border:1px solid var(--line); border-radius:12px;
     padding:9px 14px; color:var(--text-dim); font-family:inherit; font-size:13px;
   }
   #start-input:focus{color:var(--text);}
-  #dest-row{display:flex; gap:8px; margin-bottom:10px;}
+  #dest-row{display:flex; gap:8px; margin-bottom:10px; position:relative;}
+
+  .suggest-list{
+    display:none; position:absolute; left:0; right:0; bottom:calc(100% + 6px);
+    background:rgba(20,23,28,.95); backdrop-filter:blur(8px);
+    border:1px solid var(--line); border-radius:12px; overflow:hidden;
+    max-height:180px; overflow-y:auto; z-index:35;
+  }
+  .suggest-list.show{display:block;}
+  .suggest-item{
+    padding:10px 14px; font-size:13px; color:var(--text);
+    border-top:1px solid var(--line);
+  }
+  .suggest-item:first-child{border-top:none;}
+  .suggest-item:active{background:var(--panel-2);}
   #dest-input{
     flex:1; background:rgba(20,23,28,.72); backdrop-filter:blur(6px);
     border:1px solid var(--line); border-radius:12px;
@@ -214,6 +231,8 @@
   }
   #route-summary.show{display:flex;}
   #route-summary .val{color:var(--text); font-weight:500;}
+  #route-summary-actions{display:flex; gap:4px;}
+  #route-edit{color:var(--teal); font-family:inherit; background:none; border:none; font-size:12px; padding:4px;}
   #route-clear{color:var(--danger); font-family:inherit; background:none; border:none; font-size:12px; padding:4px;}
 
   #controls-row{display:flex; align-items:center; justify-content:center; gap:22px;}
@@ -321,6 +340,15 @@
     </select>
     <label class="cs-label">Format</label>
     <select id="format-select"></select>
+    <label class="cs-label">Loop-Aufnahme</label>
+    <select id="loop-select">
+      <option value="0">Aus — durchgehend aufnehmen</option>
+      <option value="5">Letzte 5 Minuten</option>
+      <option value="10">Letzte 10 Minuten</option>
+      <option value="15">Letzte 15 Minuten</option>
+      <option value="30">Letzte 30 Minuten</option>
+    </select>
+    <p class="cs-hint">Bei aktivem Loop werden ältere Ausschnitte automatisch gelöscht — Clips, die du behalten willst, vorher unter 🎞️ speichern.</p>
     <div id="camera-settings-actions">
       <button id="camera-settings-cancel">Abbrechen</button>
       <button id="camera-settings-apply">Übernehmen</button>
@@ -356,16 +384,23 @@
 </div>
 
 <div id="hud-bottom">
-  <div id="start-row">
-    <input id="start-input" type="text" placeholder="Start: aktueller Standort" />
-  </div>
-  <div id="dest-row">
-    <input id="dest-input" type="text" placeholder="Ziel oder Koordinaten (47.37, 8.54)" />
-    <button id="dest-go">Los</button>
+  <div id="search-fields">
+    <div id="start-row">
+      <input id="start-input" type="text" placeholder="Start: aktueller Standort" autocomplete="off" />
+      <div id="start-suggest" class="suggest-list"></div>
+    </div>
+    <div id="dest-row">
+      <input id="dest-input" type="text" placeholder="Ziel oder Koordinaten (47.37, 8.54)" autocomplete="off" />
+      <button id="dest-go">Los</button>
+      <div id="dest-suggest" class="suggest-list"></div>
+    </div>
   </div>
   <div id="route-summary">
     <span>Ankunft ca. <span class="val" id="eta-val">—</span> · noch <span class="val" id="dist-val">—</span></span>
-    <button id="route-clear">Route beenden</button>
+    <span id="route-summary-actions">
+      <button id="route-edit">Bearbeiten</button>
+      <button id="route-clear">Beenden</button>
+    </span>
   </div>
   <div id="controls-row">
     <button class="icon-btn" id="mic-btn" title="Mikrofon">🎙️</button>
@@ -410,7 +445,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '1.4.1';
+  const APP_VERSION = '1.5.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -627,6 +662,64 @@
   el('dest-input').addEventListener('keydown', e => { if (e.key === 'Enter') planRoute(); });
   el('start-input').addEventListener('keydown', e => { if (e.key === 'Enter') planRoute(); });
 
+  // ---------- Autocomplete (Nominatim) ----------
+  const startResolved = { coord: null };
+  const destResolved = { coord: null };
+
+  function setupAutocomplete(inputId, listId, resolvedStore){
+    const input = el(inputId), list = el(listId);
+    let debounceTimer = null, controller = null;
+
+    input.addEventListener('input', () => {
+      resolvedStore.coord = null;
+      clearTimeout(debounceTimer);
+      const q = input.value.trim();
+      if (q.length < 3 || parseCoordInput(q)) { list.innerHTML = ''; list.classList.remove('show'); return; }
+      debounceTimer = setTimeout(() => fetchSuggestions(q), 400);
+    });
+    input.addEventListener('focus', () => { if (list.children.length) list.classList.add('show'); });
+    input.addEventListener('blur', () => setTimeout(() => list.classList.remove('show'), 200));
+
+    async function fetchSuggestions(q){
+      if (controller) controller.abort();
+      controller = new AbortController();
+      try {
+        const res = await fetch(
+          'https://nominatim.openstreetmap.org/search?format=json&limit=5&q=' + encodeURIComponent(q),
+          { signal: controller.signal }
+        );
+        const data = await res.json();
+        renderSuggestions(data);
+      } catch (e) { /* abgebrochen oder offline — ignorieren */ }
+    }
+
+    function renderSuggestions(data){
+      list.innerHTML = '';
+      if (!data.length) { list.classList.remove('show'); return; }
+      data.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'suggest-item';
+        row.textContent = item.display_name;
+        row.addEventListener('mousedown', e => e.preventDefault()); // Blur vor Klick verhindern
+        row.addEventListener('click', () => {
+          input.value = item.display_name;
+          resolvedStore.coord = { lat: parseFloat(item.lat), lon: parseFloat(item.lon) };
+          list.classList.remove('show');
+        });
+        list.appendChild(row);
+      });
+      list.classList.add('show');
+    }
+  }
+
+  setupAutocomplete('start-input', 'start-suggest', startResolved);
+  setupAutocomplete('dest-input', 'dest-suggest', destResolved);
+
+  async function resolveField(text, resolvedStore){
+    if (resolvedStore.coord) return resolvedStore.coord;
+    return await resolvePoint(text);
+  }
+
   function parseCoordInput(q){
     // Erkennt "lat, lon" oder "lat lon" (Dezimalgrad, mit optionalem Vorzeichen)
     const m = q.match(/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
@@ -643,7 +736,9 @@
     const data = await res.json();
     if (!data.length) return null;
     return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-  }  async function planRoute(){
+  }
+
+  async function planRoute(){
     const q = el('dest-input').value.trim();
     const startQ = el('start-input').value.trim();
     if (!q) return;
@@ -651,13 +746,13 @@
     el('turn-text').textContent = 'Suche Ziel...';
     el('turn-banner').classList.add('show');
     try {
-      const dest = await resolvePoint(q);
+      const dest = await resolveField(q, destResolved);
       if (!dest) { el('turn-text').textContent = 'Ziel nicht gefunden.'; return; }
 
       let start = lastPos;
       if (startQ) {
         el('turn-text').textContent = 'Suche Start...';
-        const resolvedStart = await resolvePoint(startQ);
+        const resolvedStart = await resolveField(startQ, startResolved);
         if (!resolvedStart) { el('turn-text').textContent = 'Startort nicht gefunden.'; return; }
         start = resolvedStart;
       }
@@ -678,6 +773,7 @@
         .toLocaleTimeString('de-CH', { hour:'2-digit', minute:'2-digit' });
       el('dist-val').textContent = (route.distance / 1000).toFixed(1) + ' km';
       map.__userMoved = false;
+      el('search-fields').classList.add('hidden');
     } catch (e) {
       el('turn-text').textContent = 'Routing fehlgeschlagen (Verbindung prüfen).';
     }
@@ -751,6 +847,10 @@
     speechSynthesis.speak(u);
   }
 
+  el('route-edit').addEventListener('click', () => {
+    el('search-fields').classList.remove('hidden');
+  });
+
   el('route-clear').addEventListener('click', () => {
     if (routeLine) map.removeLayer(routeLine);
     routeSteps = []; nextStepIndex = 0;
@@ -758,6 +858,7 @@
     el('turn-banner').classList.remove('show');
     el('dest-input').value = '';
     el('start-input').value = '';
+    el('search-fields').classList.remove('hidden');
   });
 
   // ---------- Overlay drawing (burned-in HUD onto canvas for recording) ----------
@@ -787,11 +888,14 @@
   }
 
   // ---------- Recording ----------
+  let segmentTimer = null, continueAfterStop = false, loopMinutes = 0, segmentLengthMinutes = 5;
+  let clips = []; // { id, url, blob, name, time }
+
   el('rec-btn').addEventListener('click', () => {
     recording ? stopRecording() : startRecording();
   });
 
-  function startRecording(){
+  function startSegmentRecorder(){
     const canvasStream = canvas.captureStream(30);
     let combined = canvasStream;
     if (micEnabled && micStream) {
@@ -805,23 +909,35 @@
     recordedChunks = [];
     mediaRecorder = new MediaRecorder(combined, options);
     mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
-    mediaRecorder.onstop = saveClip;
+    mediaRecorder.onstop = handleSegmentStop;
     mediaRecorder.start(1000);
+  }
+
+  function startRecording(){
+    continueAfterStop = false;
+    startSegmentRecorder();
 
     recording = true;
     recStartTime = Date.now();
     el('rec-btn').classList.add('recording');
     el('recDot').classList.add('live');
     timerInterval = setInterval(updateTimer, 500);
+
+    if (loopMinutes > 0) {
+      segmentLengthMinutes = Math.max(1, Math.round(loopMinutes / 3));
+      segmentTimer = setInterval(() => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          continueAfterStop = true;
+          mediaRecorder.stop();
+        }
+      }, segmentLengthMinutes * 60000);
+    }
   }
 
   function stopRecording(){
+    continueAfterStop = false;
+    clearInterval(segmentTimer);
     if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-    recording = false;
-    el('rec-btn').classList.remove('recording');
-    el('recDot').classList.remove('live');
-    clearInterval(timerInterval);
-    el('timer').textContent = '00:00';
   }
 
   function updateTimer(){
@@ -831,27 +947,61 @@
     el('timer').textContent = `${mm}:${ss}`;
   }
 
-  function saveClip(){
+  function handleSegmentStop(){
     const ext = (selectedFormat && selectedFormat.ext) || 'webm';
     const blob = new Blob(recordedChunks, { type: (selectedFormat && selectedFormat.mime) || 'video/webm' });
     const url = URL.createObjectURL(blob);
     clipCounter++;
-    const name = `fahrspur-clip-${clipCounter}.${ext}`;
-    const time = new Date().toLocaleTimeString('de-CH');
-    const row = document.createElement('div');
-    row.className = 'clip-row';
-    row.innerHTML = `
-      <div class="clip-meta">
-        <div class="clip-name">${name}</div>
-        <div class="clip-time">${time} · ${(blob.size/1024/1024).toFixed(1)} MB</div>
-      </div>
-      <a class="clip-dl" href="${url}" download="${name}">Speichern</a>
-    `;
-    el('clips-list').prepend(row);
+    clips.push({
+      id: clipCounter,
+      url, blob,
+      name: `fahrspur-clip-${clipCounter}.${ext}`,
+      time: new Date().toLocaleTimeString('de-CH')
+    });
+
+    if (loopMinutes > 0) {
+      const maxSegments = Math.max(1, Math.round(loopMinutes / segmentLengthMinutes));
+      while (clips.length > maxSegments) {
+        const old = clips.shift();
+        URL.revokeObjectURL(old.url);
+      }
+    }
+    renderClipsList();
+
+    if (continueAfterStop) {
+      continueAfterStop = false;
+      startSegmentRecorder();
+    } else {
+      recording = false;
+      el('rec-btn').classList.remove('recording');
+      el('recDot').classList.remove('live');
+      clearInterval(timerInterval);
+      clearInterval(segmentTimer);
+      el('timer').textContent = '00:00';
+    }
+  }
+
+  function renderClipsList(){
+    const list = el('clips-list');
+    list.innerHTML = '';
+    for (let i = clips.length - 1; i >= 0; i--) {
+      const c = clips[i];
+      const row = document.createElement('div');
+      row.className = 'clip-row';
+      row.innerHTML = `
+        <div class="clip-meta">
+          <div class="clip-name">${c.name}</div>
+          <div class="clip-time">${c.time} · ${(c.blob.size/1024/1024).toFixed(1)} MB</div>
+        </div>
+        <a class="clip-dl" href="${c.url}" download="${c.name}">Speichern</a>
+      `;
+      list.appendChild(row);
+    }
   }
 
   // ---------- Clips sheet ----------
   el('clips-btn').addEventListener('click', () => el('clips-sheet').classList.add('show'));
+
 
   // ---------- View swap (Kamera ↔ Karte) ----------
   el('swap-btn').addEventListener('click', () => {
@@ -868,6 +1018,7 @@
     for (const opt of resSelect.options) {
       if (RES_PRESETS[opt.value] === recRes) { resSelect.value = opt.value; break; }
     }
+    el('loop-select').value = String(loopMinutes);
     el('camera-settings-sheet').classList.add('show');
   });
   el('camera-settings-cancel').addEventListener('click', () => el('camera-settings-sheet').classList.remove('show'));
@@ -917,11 +1068,13 @@
     const camSelect = el('camera-select');
     const resSelect = el('resolution-select');
     const formatSelect = el('format-select');
+    const loopSelect = el('loop-select');
 
     const deviceId = camSelect.value || null;
     const preset = RES_PRESETS[resSelect.value] || RES_PRESETS['1080p'];
     const formats = formatSelect.__formats || detectSupportedFormats();
     const format = formats[parseInt(formatSelect.value, 10)] || formats[0];
+    const newLoopMinutes = parseInt(loopSelect.value, 10) || 0;
 
     el('camera-settings-apply').textContent = 'Wird angewendet...';
     try {
@@ -929,7 +1082,22 @@
       currentDeviceId = deviceId;
       recRes = preset;
       selectedFormat = format;
+      loopMinutes = newLoopMinutes;
       fitCanvas();
+
+      if (recording) {
+        clearInterval(segmentTimer);
+        if (loopMinutes > 0) {
+          segmentLengthMinutes = Math.max(1, Math.round(loopMinutes / 3));
+          segmentTimer = setInterval(() => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+              continueAfterStop = true;
+              mediaRecorder.stop();
+            }
+          }, segmentLengthMinutes * 60000);
+        }
+      }
+
       el('camera-settings-sheet').classList.remove('show');
     } catch(e) {
       alert('Kamera konnte nicht gewechselt werden: ' + e.message);
