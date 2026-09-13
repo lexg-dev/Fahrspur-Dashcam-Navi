@@ -142,7 +142,7 @@
 
   /* Turn banner */
   #turn-banner{
-    position:fixed; top:calc(env(safe-area-inset-top) + 62px); left:16px; right:16px;
+    position:fixed; top:calc(env(safe-area-inset-top) + 104px); left:16px; right:16px;
     z-index:20; display:none;
     background:rgba(20,23,28,.82); backdrop-filter:blur(8px);
     border:1px solid var(--line); border-left:3px solid var(--teal);
@@ -259,8 +259,9 @@
   #route-clear{color:var(--danger); font-family:inherit; background:none; border:none; font-size:12px; padding:4px;}
 
   #status-bar{
+    position:fixed; z-index:19;
+    top:calc(env(safe-area-inset-top) + 58px); left:16px; right:16px;
     display:flex; flex-wrap:wrap; gap:6px;
-    margin:0 2px 12px; padding:0;
   }
   .status-badge{
     display:flex; align-items:center; gap:6px;
@@ -365,6 +366,8 @@
   </div>
 </div>
 
+<div id="status-bar"></div>
+
 <div id="camera-settings-sheet">
   <div id="camera-settings-panel">
     <h2>Kamera & Aufnahme <span id="app-version-tag"></span></h2>
@@ -446,7 +449,6 @@
       <button id="route-clear">Beenden</button>
     </span>
   </div>
-  <div id="status-bar"></div>
   <div id="controls-row">
     <button class="icon-btn" id="mic-btn" title="Mikrofon">🎙️</button>
     <button id="rec-btn" title="Aufnahme"><div class="core"></div></button>
@@ -490,7 +492,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '1.6.0';
+  const APP_VERSION = '1.6.1';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -1112,6 +1114,15 @@
   // ---------- View swap (Kamera ↔ Karte) ----------
   el('swap-btn').addEventListener('click', () => {
     document.body.classList.toggle('swap-view');
+    // Manuell verschobene Positionen zurücksetzen, damit die CSS-Regeln
+    // für Vollbild/Inset nach dem Tauschen wieder greifen
+    [el('map-wrap'), cameraEl.parentElement, canvas].forEach(t => {
+      if (!t) return;
+      t.style.left = '';
+      t.style.top = '';
+      t.style.right = '';
+      t.style.bottom = '';
+    });
     setTimeout(() => { if (map) map.invalidateSize(); syncInsetControls(); }, 260);
   });
 

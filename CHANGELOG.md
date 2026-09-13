@@ -4,6 +4,30 @@ Alle nennenswerten Änderungen an diesem Projekt werden hier festgehalten.
 Format angelehnt an [Keep a Changelog](https://keepachangelog.com/),
 Versionierung nach [SemVer](https://semver.org/).
 
+## [1.6.1] — Fixes
+### Behoben
+- Ansicht-Tauschen (⇄) funktionierte nicht mehr, nachdem das Inset einmal
+  manuell verschoben wurde (feste Inline-Position überschrieb die
+  CSS-Umschaltregel) — wird beim Tauschen jetzt zurückgesetzt
+### Geändert
+- Statusleiste von unten nach oben verschoben (direkt unter Timer/Zahnrad),
+  dort deutlich besser sichtbar statt am unteren Rand zwischen den
+  Bedienelementen
+
+## [1.6.0] — Navigation, Bedienbarkeit, Statusanzeige
+### Hinzugefügt
+- Karte zoomt während aktiver Navigation automatisch auf "Straße voraus"
+  (Zoomstufe 17) statt auf der Gesamtübersicht der Route zu bleiben
+- Kleines Inset (Kamera oder Karte, je nach Ansicht) frei verschiebbar
+  per Zieh-Griff, sowie minimierbar/wiederherstellbar
+- Kompakte, gut lesbare Statusleiste über den Bedienelementen: Aufnahme
+  inkl. Timer, Loop-Modus, GPS-Signalstärke, Mikrofonstatus, Verkehr an/aus,
+  Anzahl & Größe gespeicherter Clips
+### Geändert
+- Wake Lock (Bildschirm-wach-halten) wird jetzt erst beim Antippen von
+  "Zugriff erlauben & starten" angefordert (zuvor zu früh ohne
+  Nutzerinteraktion, wurde von Safari oft stillschweigend abgelehnt)
+
 ## [1.5.0] — Suche, Loop-Aufnahme, Bedienung
 ### Hinzugefügt
 - Autoergänzung für Start- und Zielfeld (Live-Vorschläge über Nominatim
