@@ -82,7 +82,8 @@
     background:var(--panel); border:1px solid var(--line); border-radius:18px;
     padding:20px; width:100%; max-width:360px;
   }
-  #camera-settings-panel h2{font-size:16px; margin:0 0 14px;}
+  #camera-settings-panel h2{font-size:16px; margin:0 0 14px; display:flex; align-items:baseline; gap:8px;}
+  #app-version-tag{font-size:11px; font-weight:400; color:var(--text-dim); font-family:'JetBrains Mono', monospace;}
   .cs-label{display:block; font-size:12px; color:var(--text-dim); margin:12px 0 6px;}
   #camera-settings-panel select{
     width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
@@ -309,7 +310,7 @@
 
 <div id="camera-settings-sheet">
   <div id="camera-settings-panel">
-    <h2>Kamera & Aufnahme</h2>
+    <h2>Kamera & Aufnahme <span id="app-version-tag"></span></h2>
     <label class="cs-label">Kamera</label>
     <select id="camera-select"></select>
     <label class="cs-label">Auflösung</label>
@@ -408,6 +409,12 @@
     { label: 'WebM (Standard)', mime: 'video/webm', ext: 'webm' }
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
+
+  const APP_VERSION = '1.4.1';
+  document.addEventListener('DOMContentLoaded', () => {
+    const tag = document.getElementById('app-version-tag');
+    if (tag) tag.textContent = 'v' + APP_VERSION;
+  });
 
   const el = id => document.getElementById(id);
   const cameraEl = el('camera');
