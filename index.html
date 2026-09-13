@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Fahrspur — Dashcam & Navi</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --asphalt:#0b0d10;
+    --panel:#14171c;
+    --panel-2:#1b1f26;
+    --line:#262b33;
+    --amber:#ff9d2f;
+    --amber-dim:#7a5220;
+    --teal:#49d5c3;
+    --text:#e9e7e1;
+    --text-dim:#8a919b;
+    --danger:#ff4d4d;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
+  body{
+    background:var(--asphalt);
+    color:var(--text);
+    font-family:'Space Grotesk', system-ui, sans-serif;
+    position:fixed; inset:0;
+  }
+  .mono{font-family:'JetBrains Mono', monospace;}
+
+  #stage{position:fixed; inset:0; background:#000;}
+  #camera{width:100%; height:100%; object-fit:cover; display:block;}
+  #overlayCanvas{position:fixed; inset:0; width:100%; height:100%; pointer-events:none;}
+
+  /* Top HUD */
+  #hud-top{
+    position:fixed; top:0; left:0; right:0;
+    padding:calc(env(safe-area-inset-top) + 14px) 16px 10px;
+    display:flex; align-items:center; justify-content:space-between;
+    background:linear-gradient(to bottom, rgba(0,0,0,.65), transparent);
+    z-index:20; pointer-events:none;
+  }
+  .rec-chip{
+    display:flex; align-items:center; gap:8px;
+    background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:999px;
+    padding:6px 12px 6px 10px;
+  }
+  .rec-dot{width:9px; height:9px; border-radius:50%; background:var(--text-dim);}
+  .rec-dot.live{background:var(--danger); box-shadow:0 0 0 0 rgba(255,77,77,.6); animation:pulse 1.4s infinite;}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(255,77,77,.55);}
+    70%{box-shadow:0 0 0 9px rgba(255,77,77,0);}
+    100%{box-shadow:0 0 0 0 rgba(255,77,77,0);}
+  }
+  #timer{font-size:14px; letter-spacing:.02em; color:var(--text);}
+  #speed-chip{
+    background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:999px;
+    padding:6px 14px; text-align:right;
+  }
+  #speed-val{font-size:16px; font-weight:700; color:var(--amber);}
+  #speed-unit{font-size:11px; color:var(--text-dim); margin-left:4px;}
+
+  /* Turn banner */
+  #turn-banner{
+    position:fixed; top:calc(env(safe-area-inset-top) + 62px); left:16px; right:16px;
+    z-index:20; display:none;
+    background:rgba(20,23,28,.82); backdrop-filter:blur(8px);
+    border:1px solid var(--line); border-left:3px solid var(--teal);
+    border-radius:14px; padding:12px 14px;
+    align-items:center; gap:12px;
+  }
+  #turn-banner.show{display:flex;}
+  #turn-icon{font-size:26px; width:32px; text-align:center; flex-shrink:0;}
+  #turn-text{font-size:15px; line-height:1.3;}
+  #turn-dist{font-size:12px; color:var(--text-dim); margin-top:2px;}
+
+  /* Map inset */
+  #map-wrap{
+    position:fixed; z-index:25;
+    width:132px; height:132px; right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+    border-radius:16px; overflow:hidden; border:1px solid var(--line);
+    box-shadow:0 6px 20px rgba(0,0,0,.5);
+    transition:all .25s ease;
+  }
+  #map-wrap.expanded{
+    width:calc(100% - 28px); height:52%;
+    right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+  }
+  #map{width:100%; height:100%; background:#1b1f26;}
+  #map-toggle{
+    position:absolute; top:6px; right:6px; z-index:30;
+    width:26px; height:26px; border-radius:8px;
+    background:rgba(11,13,16,.7); border:1px solid var(--line);
+    color:var(--text); font-size:13px; display:flex; align-items:center; justify-content:center;
+  }
+  #traffic-toggle{
+    position:absolute; top:6px; left:6px; z-index:30;
+    width:26px; height:26px; border-radius:8px;
+    background:rgba(11,13,16,.7); border:1px solid var(--line);
+    color:var(--text); font-size:13px; display:flex; align-items:center; justify-content:center;
+    opacity:.55;
+  }
+  #traffic-toggle.on{opacity:1; border-color:var(--amber);}
+
+  #traffic-key-sheet{
+    position:fixed; inset:0; z-index:60; display:none;
+    background:rgba(6,7,9,.7); backdrop-filter:blur(4px);
+    align-items:center; justify-content:center; padding:24px;
+  }
+  #traffic-key-sheet.show{display:flex;}
+  #traffic-key-panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:18px;
+    padding:20px; width:100%; max-width:340px;
+  }
+  #traffic-key-panel h2{font-size:16px; margin:0 0 8px;}
+  #traffic-key-panel .hint{font-size:12px; color:var(--text-dim); line-height:1.5; margin:0 0 14px;}
+  #traffic-key-input{
+    width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    padding:11px 12px; color:var(--text); font-family:inherit; font-size:14px; margin-bottom:14px;
+  }
+  #traffic-key-actions{display:flex; justify-content:flex-end; gap:10px;}
+  #traffic-key-actions button{
+    font-family:inherit; font-size:13px; border-radius:10px; padding:9px 14px; border:1px solid var(--line);
+    background:var(--panel-2); color:var(--text);
+  }
+  #traffic-key-save{background:var(--amber); color:#1a1200; border-color:var(--amber); font-weight:700;}
+
+  .incident-popup{font-family:'Space Grotesk', sans-serif; font-size:13px; color:#1a1200;}
+  .incident-popup .sev{font-weight:700; display:block; margin-bottom:2px;}
+
+  /* Bottom controls */
+  #hud-bottom{
+    position:fixed; left:0; right:0; bottom:0; z-index:20;
+    padding:10px 16px calc(env(safe-area-inset-bottom) + 14px);
+    background:linear-gradient(to top, rgba(0,0,0,.75), transparent);
+  }
+  #start-row{margin-bottom:8px;}
+  #start-input{
+    width:100%; background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:12px;
+    padding:9px 14px; color:var(--text-dim); font-family:inherit; font-size:13px;
+  }
+  #start-input:focus{color:var(--text);}
+  #dest-row{display:flex; gap:8px; margin-bottom:10px;}
+  #dest-input{
+    flex:1; background:rgba(20,23,28,.72); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:12px;
+    padding:11px 14px; color:var(--text); font-family:inherit; font-size:14px;
+  }
+  #dest-input::placeholder{color:var(--text-dim);}
+  #dest-go{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:12px;
+    color:var(--teal); padding:0 16px; font-family:inherit; font-size:14px; font-weight:500;
+  }
+  #route-summary{
+    display:none; justify-content:space-between; align-items:center;
+    font-size:12px; color:var(--text-dim); margin:-2px 2px 10px; padding:0 2px;
+  }
+  #route-summary.show{display:flex;}
+  #route-summary .val{color:var(--text); font-weight:500;}
+  #route-clear{color:var(--danger); font-family:inherit; background:none; border:none; font-size:12px; padding:4px;}
+
+  #controls-row{display:flex; align-items:center; justify-content:center; gap:22px;}
+  .icon-btn{
+    width:52px; height:52px; border-radius:50%;
+    background:rgba(20,23,28,.72); backdrop-filter:blur(6px);
+    border:1px solid var(--line); color:var(--text);
+    display:flex; align-items:center; justify-content:center; font-size:19px;
+  }
+  .icon-btn.active{border-color:var(--amber); color:var(--amber);}
+  #rec-btn{
+    width:74px; height:74px; border-radius:50%;
+    background:var(--panel); border:3px solid var(--text);
+    display:flex; align-items:center; justify-content:center;
+  }
+  #rec-btn .core{
+    width:30px; height:30px; border-radius:8px; background:var(--danger);
+    transition:all .2s ease;
+  }
+  #rec-btn.recording .core{border-radius:6px; width:26px; height:26px;}
+
+  /* Clips drawer */
+  #clips-sheet{
+    position:fixed; inset:0; z-index:40; display:none;
+    background:rgba(6,7,9,.7); backdrop-filter:blur(4px);
+  }
+  #clips-sheet.show{display:block;}
+  #clips-panel{
+    position:absolute; left:0; right:0; bottom:0;
+    max-height:72%; overflow-y:auto;
+    background:var(--panel); border-radius:22px 22px 0 0;
+    padding:18px 16px calc(env(safe-area-inset-bottom) + 20px);
+    border-top:1px solid var(--line);
+  }
+  #clips-panel h2{font-size:16px; margin:0 0 4px;}
+  #clips-panel .hint{font-size:12px; color:var(--text-dim); margin:0 0 16px;}
+  .clip-row{
+    display:flex; align-items:center; gap:12px;
+    padding:10px 0; border-top:1px solid var(--line);
+  }
+  .clip-row:first-of-type{border-top:none;}
+  .clip-meta{flex:1;}
+  .clip-name{font-size:14px;}
+  .clip-time{font-size:12px; color:var(--text-dim);}
+  .clip-dl{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    color:var(--teal); padding:8px 14px; font-family:inherit; font-size:13px;
+  }
+  #close-clips{
+    position:absolute; top:14px; right:16px;
+    width:30px; height:30px; border-radius:50%;
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+  }
+
+  #permission-gate{
+    position:fixed; inset:0; z-index:100; background:var(--asphalt);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:32px; text-align:center; gap:18px;
+  }
+  #permission-gate h1{font-size:22px; margin:0; font-weight:700;}
+  #permission-gate p{font-size:14px; color:var(--text-dim); line-height:1.5; max-width:320px; margin:0;}
+  #permission-gate button{
+    background:var(--amber); color:#1a1200; border:none; border-radius:12px;
+    padding:14px 28px; font-family:inherit; font-size:15px; font-weight:700;
+  }
+  #permission-error{color:var(--danger); font-size:13px; max-width:320px;}
+</style>
+</head>
+<body>
+
+<div id="permission-gate">
+  <h1>Fahrspur</h1>
+  <p>Dashcam-Aufnahme und Navigation in einer Ansicht. Für Kamera, Mikrofon und Standort brauche ich kurz deine Freigabe.</p>
+  <button id="grant-access">Zugriff erlauben & starten</button>
+  <p id="permission-error"></p>
+</div>
+
+<div id="stage">
+  <video id="camera" autoplay muted playsinline></video>
+  <canvas id="overlayCanvas"></canvas>
+</div>
+
+<div id="hud-top">
+  <div class="rec-chip">
+    <div class="rec-dot" id="recDot"></div>
+    <span id="timer" class="mono">00:00</span>
+  </div>
+  <div id="speed-chip"><span id="speed-val" class="mono">--</span><span id="speed-unit">km/h</span></div>
+</div>
+
+<div id="turn-banner">
+  <div id="turn-icon">↑</div>
+  <div>
+    <div id="turn-text">Route berechnen...</div>
+    <div id="turn-dist"></div>
+  </div>
+</div>
+
+<div id="map-wrap">
+  <button id="map-toggle">⤢</button>
+  <button id="traffic-toggle" title="Verkehr">🚦</button>
+  <div id="map"></div>
+</div>
+
+<div id="traffic-key-sheet">
+  <div id="traffic-key-panel">
+    <h2>TomTom-Zugang</h2>
+    <p class="hint">Kostenlosen API-Key auf developer.tomtom.com anlegen und hier einfügen. Wird nur lokal in diesem Browser gespeichert.</p>
+    <input id="traffic-key-input" type="text" placeholder="TomTom API-Key" autocapitalize="off" autocorrect="off" spellcheck="false" />
+    <div id="traffic-key-actions">
+      <button id="traffic-key-cancel">Abbrechen</button>
+      <button id="traffic-key-save">Speichern & aktivieren</button>
+    </div>
+  </div>
+</div>
+
+<div id="hud-bottom">
+  <div id="start-row">
+    <input id="start-input" type="text" placeholder="Start: aktueller Standort" />
+  </div>
+  <div id="dest-row">
+    <input id="dest-input" type="text" placeholder="Ziel oder Koordinaten (47.37, 8.54)" />
+    <button id="dest-go">Los</button>
+  </div>
+  <div id="route-summary">
+    <span>Ankunft ca. <span class="val" id="eta-val">—</span> · noch <span class="val" id="dist-val">—</span></span>
+    <button id="route-clear">Route beenden</button>
+  </div>
+  <div id="controls-row">
+    <button class="icon-btn" id="mic-btn" title="Mikrofon">🎙️</button>
+    <button id="rec-btn" title="Aufnahme"><div class="core"></div></button>
+    <button class="icon-btn" id="clips-btn" title="Aufnahmen">🎞️</button>
+  </div>
+</div>
+
+<div id="clips-sheet">
+  <div id="clips-panel">
+    <button id="close-clips">✕</button>
+    <h2>Aufnahmen dieser Sitzung</h2>
+    <p class="hint">Clips liegen nur im Speicher dieses Tabs — vor dem Schließen der Seite herunterladen.</p>
+    <div id="clips-list"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  // ---------- State ----------
+  let stream = null, micStream = null, mediaRecorder = null, recordedChunks = [];
+  let recording = false, recStartTime = 0, timerInterval = null;
+  let map, meMarker, routeLine, routeSteps = [], nextStepIndex = 0;
+  let lastPos = null, currentSpeedKmh = null, micEnabled = true;
+  let clipCounter = 0;
+
+  const el = id => document.getElementById(id);
+  const cameraEl = el('camera');
+  const canvas = el('overlayCanvas');
+  const ctx = canvas.getContext('2d');
+
+  function fitCanvas(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  // ---------- Permission gate ----------
+  el('grant-access').addEventListener('click', async () => {
+    el('permission-error').textContent = '';
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width:{ideal:1280}, height:{ideal:720} },
+        audio: false
+      });
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch(e){ micStream = null; micEnabled = false; el('mic-btn').classList.remove('active'); }
+
+      cameraEl.srcObject = stream;
+      fitCanvas();
+
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(onPosition, onPosError, {
+          enableHighAccuracy:true, maximumAge:1000, timeout:8000
+        });
+      }
+
+      initMap();
+      requestAnimationFrame(drawLoop);
+      el('permission-gate').style.display = 'none';
+    } catch (err) {
+      el('permission-error').textContent = 'Zugriff verweigert oder nicht verfügbar: ' + err.message + '. Diese Seite muss über HTTPS laufen (nicht als lokale Datei geöffnet).';
+    }
+  });
+
+  el('mic-btn').classList.add('active');
+  el('mic-btn').addEventListener('click', () => {
+    micEnabled = !micEnabled;
+    el('mic-btn').classList.toggle('active', micEnabled);
+  });
+
+  // ---------- Geolocation ----------
+  function onPosition(p){
+    const { latitude, longitude, speed } = p.coords;
+    lastPos = { lat: latitude, lon: longitude };
+    if (typeof speed === 'number' && speed !== null && !isNaN(speed)) {
+      currentSpeedKmh = Math.max(0, speed * 3.6);
+    }
+    el('speed-val').textContent = currentSpeedKmh !== null ? Math.round(currentSpeedKmh) : '--';
+
+    if (map && meMarker) {
+      meMarker.setLatLng([latitude, longitude]);
+      if (!map.__userMoved) map.setView([latitude, longitude], map.getZoom());
+    }
+    checkRouteProgress();
+  }
+  function onPosError(){ el('speed-val').textContent = '--'; }
+
+  // ---------- Map ----------
+  function initMap(){
+    map = L.map('map', { zoomControl:false, attributionControl:false }).setView([47.3769, 8.5417], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
+    meMarker = L.circleMarker([47.3769, 8.5417], {
+      radius:7, color:'#ff9d2f', fillColor:'#ff9d2f', fillOpacity:1, weight:2
+    }).addTo(map);
+    map.on('dragstart', () => { map.__userMoved = true; });
+  }
+
+  el('map-toggle').addEventListener('click', () => {
+    el('map-wrap').classList.toggle('expanded');
+    setTimeout(() => map.invalidateSize(), 260);
+  });
+
+  // ---------- Traffic (TomTom, optional API key) ----------
+  let trafficLayer = null, incidentMarkers = [], trafficOn = false, incidentTimer = null;
+  let lastIncidentFetch = 0;
+  const INCIDENT_MIN_GAP_MS = 45000; // nie öfter als alle 45s abfragen, egal wie oft die Karte sich bewegt
+  const TT_KEY_STORAGE = 'fahrspur_tomtom_key';
+
+  function getTomTomKey(){ return localStorage.getItem(TT_KEY_STORAGE) || ''; }
+
+  el('traffic-toggle').addEventListener('click', () => {
+    if (trafficOn) { disableTraffic(); return; }
+    const key = getTomTomKey();
+    if (!key) { el('traffic-key-sheet').classList.add('show'); return; }
+    enableTraffic(key);
+  });
+
+  el('traffic-key-cancel').addEventListener('click', () => el('traffic-key-sheet').classList.remove('show'));
+  el('traffic-key-save').addEventListener('click', () => {
+    const key = el('traffic-key-input').value.trim();
+    if (!key) return;
+    localStorage.setItem(TT_KEY_STORAGE, key);
+    el('traffic-key-sheet').classList.remove('show');
+    enableTraffic(key);
+  });
+  // Long-press the traffic button to change/clear a stored key
+  let ttPressTimer = null;
+  el('traffic-toggle').addEventListener('touchstart', () => {
+    ttPressTimer = setTimeout(() => {
+      el('traffic-key-input').value = getTomTomKey();
+      el('traffic-key-sheet').classList.add('show');
+    }, 600);
+  });
+  el('traffic-toggle').addEventListener('touchend', () => clearTimeout(ttPressTimer));
+
+  function enableTraffic(key){
+    trafficLayer = L.tileLayer(
+      `https://api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${key}&t={t}`,
+      { maxZoom: 22, opacity: 0.85 }
+    ).addTo(map);
+    // Kachel-Cache-Buster: alle 3 Minuten neu anfragen statt auf alten Browser-Cache zu vertrauen
+    let tBucket = Math.floor(Date.now() / 180000);
+    setInterval(() => {
+      const nb = Math.floor(Date.now() / 180000);
+      if (nb !== tBucket && trafficLayer) {
+        tBucket = nb;
+        trafficLayer.setUrl(`https://api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${key}&t=${tBucket}`);
+      }
+    }, 15000);
+    trafficOn = true;
+    el('traffic-toggle').classList.add('on');
+    refreshIncidents(true);
+    incidentTimer = setInterval(() => refreshIncidents(true), 45000);
+    map.on('moveend', onMoveEndRefresh);
+  }
+
+  function onMoveEndRefresh(){ refreshIncidents(false); }
+
+  function disableTraffic(){
+    if (trafficLayer) { map.removeLayer(trafficLayer); trafficLayer = null; }
+    incidentMarkers.forEach(m => map.removeLayer(m));
+    incidentMarkers = [];
+    trafficOn = false;
+    el('traffic-toggle').classList.remove('on');
+    clearInterval(incidentTimer);
+    map.off('moveend', onMoveEndRefresh);
+  }
+
+  async function refreshIncidents(force){
+    if (!trafficOn) return;
+    const now = Date.now();
+    if (!force && (now - lastIncidentFetch) < INCIDENT_MIN_GAP_MS) return;
+    lastIncidentFetch = now;
+    const key = getTomTomKey();
+    const b = map.getBounds();
+    const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+    const fields = '{incidents{type,geometry{type,coordinates},properties{iconCategory,magnitudeOfDelay,events{description}}}}';
+    const url = `https://api.tomtom.com/traffic/services/5/incidentDetails?key=${key}&bbox=${bbox}&fields=${encodeURIComponent(fields)}&language=de-DE`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return; // z.B. ungültiger Key oder Kontingent erreicht
+      const data = await res.json();
+      incidentMarkers.forEach(m => map.removeLayer(m));
+      incidentMarkers = [];
+      (data.incidents || []).forEach(inc => {
+        const coords = inc.geometry && inc.geometry.coordinates;
+        if (!coords) return;
+        const point = inc.geometry.type === 'Point' ? coords : coords[Math.floor(coords.length / 2)];
+        const desc = (inc.properties.events && inc.properties.events[0] && inc.properties.events[0].description) || 'Verkehrsstörung';
+        const sevWords = ['Unbekannt','Gering','Mäßig','Erheblich','Stau'];
+        const sev = sevWords[inc.properties.magnitudeOfDelay] || 'Meldung';
+        const marker = L.circleMarker([point[1], point[0]], {
+          radius: 6, color: '#ff9d2f', fillColor: '#ff9d2f', fillOpacity: .9, weight: 1
+        }).bindPopup(`<div class="incident-popup"><span class="sev">${sev}</span>${desc}</div>`);
+        marker.addTo(map);
+        incidentMarkers.push(marker);
+      });
+    } catch (e) { /* still, Verbindung evtl. offline */ }
+  }
+
+  // ---------- Routing (Nominatim geocode + OSRM route) ----------
+  el('dest-go').addEventListener('click', planRoute);
+  el('dest-input').addEventListener('keydown', e => { if (e.key === 'Enter') planRoute(); });
+  el('start-input').addEventListener('keydown', e => { if (e.key === 'Enter') planRoute(); });
+
+  function parseCoordInput(q){
+    // Erkennt "lat, lon" oder "lat lon" (Dezimalgrad, mit optionalem Vorzeichen)
+    const m = q.match(/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
+    if (!m) return null;
+    const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+    if (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return { lat, lon };
+  }
+
+  async function resolvePoint(q){
+    const coord = parseCoordInput(q);
+    if (coord) return coord;
+    const res = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
+    const data = await res.json();
+    if (!data.length) return null;
+    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  }  async function planRoute(){
+    const q = el('dest-input').value.trim();
+    const startQ = el('start-input').value.trim();
+    if (!q) return;
+    if (!startQ && !lastPos) { el('turn-text').textContent = 'Kein GPS-Standort verfügbar — Start manuell eingeben.'; el('turn-banner').classList.add('show'); return; }
+    el('turn-text').textContent = 'Suche Ziel...';
+    el('turn-banner').classList.add('show');
+    try {
+      const dest = await resolvePoint(q);
+      if (!dest) { el('turn-text').textContent = 'Ziel nicht gefunden.'; return; }
+
+      let start = lastPos;
+      if (startQ) {
+        el('turn-text').textContent = 'Suche Start...';
+        const resolvedStart = await resolvePoint(startQ);
+        if (!resolvedStart) { el('turn-text').textContent = 'Startort nicht gefunden.'; return; }
+        start = resolvedStart;
+      }
+
+      const url = `https://router.project-osrm.org/route/v1/driving/${start.lon},${start.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson&steps=true`;
+      const routeRes = await fetch(url);
+      const routeData = await routeRes.json();
+      if (!routeData.routes || !routeData.routes.length) { el('turn-text').textContent = 'Keine Route gefunden.'; return; }
+
+      const route = routeData.routes[0];
+      drawRoute(route);
+      routeSteps = route.legs[0].steps;
+      nextStepIndex = 0;
+      showStep(0);
+
+      el('route-summary').classList.add('show');
+      el('eta-val').textContent = new Date(Date.now() + route.duration * 1000)
+        .toLocaleTimeString('de-CH', { hour:'2-digit', minute:'2-digit' });
+      el('dist-val').textContent = (route.distance / 1000).toFixed(1) + ' km';
+      map.__userMoved = false;
+    } catch (e) {
+      el('turn-text').textContent = 'Routing fehlgeschlagen (Verbindung prüfen).';
+    }
+  }
+
+  function drawRoute(route){
+    if (routeLine) map.removeLayer(routeLine);
+    const latlngs = route.geometry.coordinates.map(c => [c[1], c[0]]);
+    routeLine = L.polyline(latlngs, { color:'#49d5c3', weight:5, opacity:.85 }).addTo(map);
+    map.fitBounds(routeLine.getBounds(), { padding:[20,20] });
+  }
+
+  function maneuverIcon(type, modifier){
+    if (type === 'arrive') return '🏁';
+    if (type === 'depart') return '↑';
+    const m = modifier || '';
+    if (m.includes('left')) return '↰';
+    if (m.includes('right')) return '↱';
+    if (m.includes('uturn')) return '↶';
+    return '↑';
+  }
+
+  function showStep(i){
+    const step = routeSteps[i];
+    if (!step) return;
+    el('turn-icon').textContent = maneuverIcon(step.maneuver.type, step.maneuver.modifier);
+    el('turn-text').textContent = step.name ? `${verbFor(step.maneuver)} auf ${step.name}` : verbFor(step.maneuver);
+    el('turn-dist').textContent = Math.round(step.distance) + ' m';
+    el('turn-banner').classList.add('show');
+  }
+
+  function verbFor(man){
+    const m = man.modifier || '';
+    if (man.type === 'arrive') return 'Ziel erreicht';
+    if (man.type === 'depart') return 'Los geht’s';
+    if (m.includes('left')) return 'Links abbiegen';
+    if (m.includes('right')) return 'Rechts abbiegen';
+    if (m.includes('straight')) return 'Geradeaus weiter';
+    if (m.includes('uturn')) return 'Wenden';
+    return 'Weiterfahren';
+  }
+
+  function distMeters(a, b){
+    const R = 6371000, toRad = d => d * Math.PI / 180;
+    const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+    const s = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  function checkRouteProgress(){
+    if (!routeSteps.length || !lastPos || nextStepIndex >= routeSteps.length) return;
+    const step = routeSteps[nextStepIndex];
+    const loc = step.maneuver.location; // [lon, lat]
+    const d = distMeters(lastPos, { lat: loc[1], lon: loc[0] });
+    el('turn-dist').textContent = Math.round(d) + ' m';
+    if (d < 40) {
+      speak(verbFor(step.maneuver) + (step.name ? ' auf ' + step.name : ''));
+      nextStepIndex++;
+      if (nextStepIndex < routeSteps.length) showStep(nextStepIndex);
+      else {
+        el('turn-text').textContent = 'Ziel erreicht';
+        el('turn-icon').textContent = '🏁';
+      }
+    }
+  }
+
+  function speak(text){
+    if (!('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'de-DE';
+    speechSynthesis.speak(u);
+  }
+
+  el('route-clear').addEventListener('click', () => {
+    if (routeLine) map.removeLayer(routeLine);
+    routeSteps = []; nextStepIndex = 0;
+    el('route-summary').classList.remove('show');
+    el('turn-banner').classList.remove('show');
+    el('dest-input').value = '';
+    el('start-input').value = '';
+  });
+
+  // ---------- Overlay drawing (burned-in HUD onto canvas for recording) ----------
+  function drawLoop(){
+    if (cameraEl.readyState >= 2) {
+      ctx.clearRect(0,0,canvas.width, canvas.height);
+      ctx.drawImage(cameraEl, 0, 0, canvas.width, canvas.height);
+
+      const pad = 16;
+      ctx.font = '600 15px "JetBrains Mono", monospace';
+      ctx.textBaseline = 'bottom';
+      const now = new Date();
+      const stamp = now.toLocaleDateString('de-CH') + '  ' + now.toLocaleTimeString('de-CH');
+      const coord = lastPos ? `${lastPos.lat.toFixed(5)}, ${lastPos.lon.toFixed(5)}` : '— kein GPS —';
+      const speedTxt = currentSpeedKmh !== null ? Math.round(currentSpeedKmh) + ' km/h' : '-- km/h';
+      const line = `${stamp}   ${coord}   ${speedTxt}`;
+
+      const metrics = ctx.measureText(line);
+      const boxH = 26;
+      ctx.fillStyle = 'rgba(0,0,0,.45)';
+      ctx.fillRect(0, canvas.height - boxH - pad*0.4, metrics.width + pad*2, boxH + 6);
+      ctx.fillStyle = '#ffb100';
+      ctx.fillText(line, pad, canvas.height - pad*0.6);
+    }
+    requestAnimationFrame(drawLoop);
+  }
+
+  // ---------- Recording ----------
+  el('rec-btn').addEventListener('click', () => {
+    recording ? stopRecording() : startRecording();
+  });
+
+  function startRecording(){
+    const canvasStream = canvas.captureStream(30);
+    let combined = canvasStream;
+    if (micEnabled && micStream) {
+      combined = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...micStream.getAudioTracks()
+      ]);
+    }
+    let options = { mimeType: 'video/webm;codecs=vp9,opus' };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'video/webm' };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) options = {};
+
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(combined, options);
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = saveClip;
+    mediaRecorder.start(1000);
+
+    recording = true;
+    recStartTime = Date.now();
+    el('rec-btn').classList.add('recording');
+    el('recDot').classList.add('live');
+    timerInterval = setInterval(updateTimer, 500);
+  }
+
+  function stopRecording(){
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+    recording = false;
+    el('rec-btn').classList.remove('recording');
+    el('recDot').classList.remove('live');
+    clearInterval(timerInterval);
+    el('timer').textContent = '00:00';
+  }
+
+  function updateTimer(){
+    const s = Math.floor((Date.now() - recStartTime) / 1000);
+    const mm = String(Math.floor(s/60)).padStart(2,'0');
+    const ss = String(s%60).padStart(2,'0');
+    el('timer').textContent = `${mm}:${ss}`;
+  }
+
+  function saveClip(){
+    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    clipCounter++;
+    const name = `fahrspur-clip-${clipCounter}.webm`;
+    const time = new Date().toLocaleTimeString('de-CH');
+    const row = document.createElement('div');
+    row.className = 'clip-row';
+    row.innerHTML = `
+      <div class="clip-meta">
+        <div class="clip-name">${name}</div>
+        <div class="clip-time">${time} · ${(blob.size/1024/1024).toFixed(1)} MB</div>
+      </div>
+      <a class="clip-dl" href="${url}" download="${name}">Speichern</a>
+    `;
+    el('clips-list').prepend(row);
+  }
+
+  // ---------- Clips sheet ----------
+  el('clips-btn').addEventListener('click', () => el('clips-sheet').classList.add('show'));
+  el('close-clips').addEventListener('click', () => el('clips-sheet').classList.remove('show'));
+
+  // Keep screen awake while page is open (best effort)
+  let wakeLock = null;
+  async function requestWakeLock(){
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') requestWakeLock();
+  });
+  requestWakeLock();
+
+})();
+</script>
+</body>
+</html>
