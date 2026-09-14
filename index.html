@@ -183,20 +183,20 @@
 
   /* Turn banner — mittig oben, wie bei Google Maps */
   #turn-banner{
-    position:fixed; top:calc(env(safe-area-inset-top) + 44px);
+    position:fixed; top:calc(env(safe-area-inset-top) + 8px);
     left:50%; transform:translateX(-50%);
-    width:min(78%, 320px);
+    width:min(60%, 320px);
     z-index:22; display:none;
     background:var(--panel); backdrop-filter:blur(10px);
     border-left:4px solid var(--accent-blue);
-    border-radius:12px; padding:10px 16px;
+    border-radius:999px; padding:6px 16px 6px 12px;
     align-items:center; gap:10px;
     box-shadow:0 4px 15px rgba(0,0,0,.4);
   }
   #turn-banner.show{display:flex;}
-  #turn-icon{font-size:22px; width:26px; text-align:center; flex-shrink:0;}
-  #turn-text{font-size:14px; font-weight:700; line-height:1.3;}
-  #turn-dist{font-size:11px; color:var(--text-dim); margin-top:2px;}
+  #turn-icon{font-size:17px; width:20px; text-align:center; flex-shrink:0;}
+  #turn-text{font-size:12.5px; font-weight:700; line-height:1.2;}
+  #turn-dist{font-size:10px; color:var(--text-dim); margin-top:1px;}
 
   /* Map inset */
   #map-wrap{
@@ -229,6 +229,7 @@
   }
   #search-fields{
     display:block;
+    max-width:420px; margin-left:auto; margin-right:auto;
     background:var(--panel); backdrop-filter:blur(15px);
     padding:15px; border-radius:16px;
     border:1px solid rgba(255,255,255,.05);
@@ -270,11 +271,11 @@
   }
   #route-summary{
     display:none; flex-direction:column; gap:8px;
+    max-width:420px; margin-left:auto; margin-right:auto;
     background:var(--panel); backdrop-filter:blur(15px);
     padding:12px; border-radius:14px;
     border:1px solid rgba(255,255,255,.05);
     box-shadow:0 6px 20px rgba(0,0,0,.4);
-    margin:0;
   }
   #route-summary.show{display:flex;}
   #route-info-row{
@@ -487,7 +488,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.2.2';
+  const APP_VERSION = '2.2.3';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
