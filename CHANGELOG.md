@@ -4,6 +4,24 @@ Alle nennenswerten Änderungen an diesem Projekt werden hier festgehalten.
 Format angelehnt an [Keep a Changelog](https://keepachangelog.com/),
 Versionierung nach [SemVer](https://semver.org/).
 
+## [2.1.0] — Positions-Knopf, kontextabhängige Zoom-/Sucheingabe
+### Hinzugefügt
+- Neuer Knopf **⇲ Position wechseln** in der Titelleiste: zyklisch zwischen
+  vier Ecken (unten rechts → unten links → oben rechts → oben links) für
+  das kleine Inset-Fenster — ersetzt das Ziehen, das zuvor zu hängenden
+  Positionen beim Ansicht-Tauschen führen konnte. Die Position überträgt
+  sich beim Tauschen automatisch auf das jeweils neue kleine Fenster
+### Geändert
+- Zoom-Knöpfe (+/−) der Karte nur noch sichtbar, wenn die Karte im
+  Vollbild ist (in der kleinen Kartenansicht ergaben sie keinen Sinn);
+  Position von unten rechts (kollidierte mit "Los") nach oben rechts,
+  direkt unter der Geschwindigkeitsanzeige, verschoben
+- Start-/Ziel-Suchfelder nur noch sichtbar, wenn die Karte im Vollbild
+  ist — in der Kamera-Vollbildansicht ausgeblendet. Die
+  Routenzusammenfassung (Ankunft/Distanz/Navigation starten) bleibt in
+  beiden Ansichten sichtbar. "Bearbeiten" wechselt bei Bedarf automatisch
+  in die Kartenansicht
+
 ## [2.0.0] — Oberfläche neu strukturiert
 ### Geändert (Breaking: komplett neue Bedienoberfläche)
 - **Eine einzige Titelleiste oben** statt verteilter Bedienelemente:

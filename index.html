@@ -1,496 +1,1201 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Fahrspur — Dashcam & Navi</title>
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg-color: #0b0b0b;
-            --panel-bg: rgba(20, 20, 20, 0.88);
-            --panel-border: rgba(255, 255, 255, 0.12);
-            --text-color: #ffffff;
-            --text-dim: #aaaaaa;
-            --accent-red: #e50914;
-            --accent-blue: #2196F3;
-            --accent-green: #2e7d32;
-            --accent-orange: #ef6c00;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
-        body, html { width: 100%; height: 100%; overflow: hidden; background-color: var(--bg-color); font-family: 'Ubuntu', sans-serif; color: var(--text-color); }
-        #app-container { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; }
-        #video-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; background: #000; }
-        video { display: none; }
-        canvas { width: 100%; height: 100%; object-fit: cover; }
-        #map-container { position: absolute; bottom: 25px; right: 25px; width: 340px; height: 260px; z-index: 10; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 36px rgba(0,0,0,0.6); border: 2px solid var(--panel-border); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-        #map { width: 100%; height: 100%; background: #111; }
-        #app-container.swap-views #video-container { position: absolute; bottom: 25px; right: 25px; width: 340px; height: 260px; z-index: 10; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 36px rgba(0,0,0,0.6); border: 2px solid var(--panel-border); }
-        #app-container.swap-views #map-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; border-radius: 0; border: none; box-shadow: none; }
-        #titelleiste-top { position: absolute; top: 15px; left: 15px; right: 15px; z-index: 25; display: flex; justify-content: space-between; align-items: center; pointer-events: none; }
-        .leisten-panel { background: var(--panel-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); padding: 8px 18px; border-radius: 40px; display: flex; align-items: center; gap: 14px; pointer-events: auto; box-shadow: 0 6px 20px rgba(0,0,0,0.45); border: 1px solid var(--panel-border); }
-        .rec-indicator { width: 12px; height: 12px; background: #555; border-radius: 50%; transition: background 0.3s; }
-        .rec-active .rec-indicator { background: var(--accent-red); animation: pulse-red 1s infinite alternate; }
-        @keyframes pulse-red { 0% { transform: scale(0.9); opacity: 0.6; } 100% { transform: scale(1.1); opacity: 1; } }
-        #timer-display { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; color: #fff; }
-        .icon-btn { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 4px; border-radius: 50%; }
-        .badge { background: var(--accent-blue); color: #fff; padding: 2px 7px; border-radius: 12px; font-size: 11px; font-weight: 700; margin-left: 4px; }
-        .rec-button-outer { width: 32px; height: 32px; border-radius: 50%; background: transparent; border: 2px solid #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-        .rec-button-inner { width: 20px; height: 20px; border-radius: 50%; background: var(--accent-red); }
-        .rec-active .rec-button-inner { background: #fff; border-radius: 4px; width: 14px; height: 14px; }
-        .rec-active .rec-button-outer { border-color: var(--accent-red); }
-        .tacho-box { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; border-left: 1px solid rgba(255,255,255,0.15); padding-left: 12px; }
-        #speed-limit-sign { width: 40px; height: 40px; border: 4px solid #d32f2f; border-radius: 50%; background: #ffffff; color: #000000; font-weight: 700; font-size: 16px; display: none; align-items: center; justify-content: center; box-shadow: 0 3px 8px rgba(0,0,0,0.35); }
-        #turn-instruction-banner { position: absolute; top: 75px; left: 50%; transform: translateX(-50%); z-index: 20; background: var(--panel-bg); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); padding: 12px 24px; border-radius: 14px; width: 90%; max-width: 420px; text-align: center; box-shadow: 0 6px 22px rgba(0,0,0,0.4); display: none; font-size: 15px; font-weight: 700; border-left: 5px solid var(--accent-blue); }
-        #bedienung-bottom { position: absolute; bottom: 25px; left: 25px; width: 350px; z-index: 20; display: flex; flex-direction: column; gap: 12px; pointer-events: none; }
-        .bottom-panel { background: var(--panel-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); padding: 16px; border-radius: 18px; pointer-events: auto; box-shadow: 0 8px 28px rgba(0,0,0,0.5); border: 1px solid var(--panel-border); }
-        .search-group { position: relative; margin-bottom: 12px; }
-        input[type="text"] { width: 100%; padding: 12px 16px; background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 10px; color: #fff; font-size: 14px; outline: none; font-family: inherit; }
-        .suggestions-box { position: absolute; bottom: 100%; left: 0; right: 0; background: #181818; border-radius: 10px; margin-bottom: 6px; max-height: 200px; overflow-y: auto; z-index: 100; box-shadow: 0 -6px 20px rgba(0,0,0,0.55); display: none; border: 1px solid #2c2c2c; }
-        .suggestion-item { padding: 11px 16px; font-size: 13.5px; border-bottom: 1px solid #222; cursor: pointer; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .suggestion-item:hover { background: #2a2a2a; color: #fff; }
-        button { padding: 12px; background: var(--accent-blue); color: #fff; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; width: 100%; font-size: 14.5px; font-family: inherit; }
-        #route-summary-box { display: none; }
-        .summary-text { font-size: 14px; margin-bottom: 12px; color: #dddddd; line-height: 1.45; }
-        .summary-buttons { display: flex; gap: 10px; }
-        .btn-secondary { background: #3a3a3a; }
-        #start-nav-btn { background: var(--accent-green); }
-        .fullscreen-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.88); z-index: 110; display: none; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-        .modal-content { background: #161616; width: 100%; max-width: 440px; border-radius: 20px; padding: 26px; border: 1px solid #2d2d2d; max-height: 85vh; overflow-y: auto; }
-        .modal-content h2 { margin-bottom: 20px; font-size: 21px; font-weight: 700; border-bottom: 1px solid #262626; padding-bottom: 10px; }
-        .setting-row { margin-bottom: 16px; }
-        .setting-row label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--text-dim); font-weight: 700; }
-        select { width: 100%; padding: 11px; background: #222; border: 1px solid #333; border-radius: 8px; color: #fff; outline: none; font-family: inherit; }
-        .checkbox-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-        .checkbox-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent-blue); }
-        .clip-list-container { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
-        .clip-item { background: #222; padding: 12px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #2a2a2a; }
-        .clip-info { display: flex; flex-direction: column; gap: 3px; }
-        .clip-name { font-size: 13.5px; font-weight: 700; }
-        .clip-meta { font-size: 11.5px; color: var(--text-dim); }
-        .clip-actions { display: flex; gap: 8px; }
-        .clip-btn { padding: 6px 10px; font-size: 12px; border-radius: 6px; width: auto; }
-        #traffic-legend { position: absolute; bottom: 12px; left: 12px; background: rgba(10, 10, 10, 0.88); padding: 6px 12px; border-radius: 8px; font-size: 11px; z-index: 1000; display: none; flex-direction: column; gap: 5px; pointer-events: none; border: 1px solid rgba(255,255,255,0.08); }
-        .legend-item { display: flex; align-items: center; gap: 8px; }
-        .legend-color { width: 14px; height: 14px; border-radius: 3px; }
-        .leaflet-control-zoom { margin-bottom: 300px !important; margin-right: 12px !important; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Fahrspur — Dashcam & Navi</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --asphalt:#0b0d10;
+    --panel:#14171c;
+    --panel-2:#1b1f26;
+    --line:#262b33;
+    --amber:#ff9d2f;
+    --amber-dim:#7a5220;
+    --teal:#49d5c3;
+    --text:#e9e7e1;
+    --text-dim:#8a919b;
+    --danger:#ff4d4d;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
+  body{
+    background:var(--asphalt);
+    color:var(--text);
+    font-family:'Space Grotesk', system-ui, sans-serif;
+    position:fixed; inset:0;
+  }
+  .mono{font-family:'JetBrains Mono', monospace;}
+
+  #stage{position:fixed; inset:0; background:#000;}
+  #camera{width:100%; height:100%; object-fit:cover; display:block;}
+  #overlayCanvas{position:fixed; inset:0; width:100%; height:100%; pointer-events:none;}
+
+  /* Top HUD */
+  #hud-top{
+    position:fixed; top:0; left:0; right:0;
+    padding:calc(env(safe-area-inset-top) + 10px) 12px 8px;
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:linear-gradient(to bottom, rgba(0,0,0,.7), transparent);
+    z-index:30; pointer-events:none;
+  }
+  #hud-top-left, #hud-top-right{display:flex; align-items:center; gap:6px; pointer-events:auto;}
+  .rec-chip{
+    display:flex; align-items:center; gap:8px;
+    background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:999px;
+    padding:6px 12px 6px 10px;
+  }
+  .rec-dot{width:9px; height:9px; border-radius:50%; background:var(--text-dim);}
+  .rec-dot.live{background:var(--danger); box-shadow:0 0 0 0 rgba(255,77,77,.6); animation:pulse 1.4s infinite;}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(255,77,77,.55);}
+    70%{box-shadow:0 0 0 9px rgba(255,77,77,0);}
+    100%{box-shadow:0 0 0 0 rgba(255,77,77,0);}
+  }
+  #timer{font-size:14px; letter-spacing:.02em; color:var(--text);}
+  #speed-chip{
+    background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:999px;
+    padding:6px 12px; text-align:right;
+  }
+  #speed-val{font-size:15px; font-weight:700; color:var(--amber);}
+  #speed-unit{font-size:10px; color:var(--text-dim); margin-left:3px;}
+
+  .hud-icon-btn{
+    position:relative;
+    width:32px; height:32px; border-radius:50%;
+    background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
+    border:1px solid var(--line); color:var(--text); font-size:14px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .hud-icon-btn.on{border-color:var(--amber); color:var(--amber);}
+  #clips-count-badge{
+    position:absolute; top:-4px; right:-4px; min-width:15px; height:15px; padding:0 3px;
+    border-radius:999px; background:var(--teal); color:#062b28;
+    font-size:9px; font-weight:700; line-height:15px; text-align:center;
+    font-family:'JetBrains Mono', monospace; display:none;
+  }
+  #clips-count-badge.show{display:block;}
+
+  #rec-btn-top{
+    width:38px; height:38px; border-radius:50%;
+    background:var(--panel); border:2px solid var(--text);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  #rec-btn-top .core{width:14px; height:14px; border-radius:5px; background:var(--danger); transition:all .2s ease;}
+  #rec-btn-top.recording .core{border-radius:4px; width:12px; height:12px;}
+  #rec-btn-top.recording{border-color:var(--danger);}
+
+  #camera-settings-sheet{
+    position:fixed; inset:0; z-index:60; display:none;
+    background:rgba(6,7,9,.7); backdrop-filter:blur(4px);
+    align-items:center; justify-content:center; padding:24px;
+  }
+  #camera-settings-sheet.show{display:flex;}
+  #camera-settings-panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:18px;
+    padding:20px; width:100%; max-width:360px; max-height:80vh; overflow-y:auto;
+  }
+  #camera-settings-panel h2{font-size:16px; margin:0 0 14px; display:flex; align-items:baseline; gap:8px;}
+  #app-version-tag{font-size:11px; font-weight:400; color:var(--text-dim); font-family:'JetBrains Mono', monospace;}
+  .cs-label{display:block; font-size:12px; color:var(--text-dim); margin:12px 0 6px;}
+  .cs-hint{font-size:11px; color:var(--text-dim); line-height:1.4; margin:8px 0 0;}
+  .cs-toggle-row{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-top:10px; font-size:13px; color:var(--text);
+  }
+  .cs-toggle-row input[type="checkbox"]{width:20px; height:20px; accent-color:var(--amber);}
+  #settings-traffic-key{
+    width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    padding:10px 12px; color:var(--text); font-family:inherit; font-size:14px;
+  }
+  #camera-settings-panel select{
+    width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    padding:10px 12px; color:var(--text); font-family:inherit; font-size:14px;
+  }
+  #camera-settings-actions{display:flex; justify-content:flex-end; gap:10px; margin-top:18px;}
+  #camera-settings-actions button{
+    font-family:inherit; font-size:13px; border-radius:10px; padding:9px 14px; border:1px solid var(--line);
+    background:var(--panel-2); color:var(--text);
+  }
+  #camera-settings-apply{background:var(--amber); color:#1a1200; border-color:var(--amber); font-weight:700;}
+
+  /* Swapped view: map fills the screen, camera becomes the small inset */
+  body.swap-view #stage{
+    position:fixed; z-index:25;
+    width:132px; height:132px; right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+    border-radius:16px; overflow:hidden; border:1px solid var(--line);
+    box-shadow:0 6px 20px rgba(0,0,0,.5); background:#000;
+    transition:all .25s ease;
+  }
+  body.swap-view #overlayCanvas{
+    position:fixed; z-index:26;
+    width:132px; height:132px; right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+    border-radius:16px; overflow:hidden;
+    transition:all .25s ease;
+  }
+  body.swap-view #map-wrap{
+    position:fixed; inset:0; width:100%; height:100%;
+    right:auto; bottom:auto; border-radius:0; z-index:1;
+  }
+  body.swap-view #map-toggle{display:none;}
+  .inset-hidden{display:none !important;}
+
+  /* Zoom-Steuerung der Karte: nur sinnvoll, wenn die Karte im Vollbild ist —
+     in der kleinen Kartenansicht ausblenden, sonst unter die Geschwindigkeitsanzeige setzen */
+  .leaflet-control-zoom{display:none !important;}
+  body.swap-view .leaflet-control-zoom{display:block !important;}
+  body.swap-view .leaflet-top.leaflet-right{
+    top:calc(env(safe-area-inset-top) + 66px) !important;
+  }
+
+  /* Start-/Ziel-Suche nur sinnvoll, wenn die Karte im Vollbild ist */
+  body:not(.swap-view) #search-fields{display:none;}
+
+  /* Vier wählbare Ecken für das kleine Inset-Fenster (Karte im Normalmodus, Kamera im Swap-Modus) */
+  #map-wrap.pos-bl, body.swap-view #stage.pos-bl, body.swap-view #overlayCanvas.pos-bl{
+    left:14px; right:auto;
+  }
+  #map-wrap.pos-tr, body.swap-view #stage.pos-tr, body.swap-view #overlayCanvas.pos-tr{
+    top:calc(env(safe-area-inset-top) + 68px); bottom:auto;
+  }
+  #map-wrap.pos-tl, body.swap-view #stage.pos-tl, body.swap-view #overlayCanvas.pos-tl{
+    left:14px; right:auto; top:calc(env(safe-area-inset-top) + 68px); bottom:auto;
+  }
+
+  /* Turn banner — mittig oben, wie bei Google Maps */
+  #turn-banner{
+    position:fixed; top:calc(env(safe-area-inset-top) + 60px);
+    left:50%; transform:translateX(-50%);
+    width:min(78%, 320px);
+    z-index:22; display:none;
+    background:rgba(20,23,28,.88); backdrop-filter:blur(8px);
+    border:1px solid var(--line); border-left:3px solid var(--teal);
+    border-radius:14px; padding:10px 12px;
+    align-items:center; gap:10px;
+    box-shadow:0 6px 18px rgba(0,0,0,.4);
+  }
+  #turn-banner.show{display:flex;}
+  #turn-icon{font-size:22px; width:26px; text-align:center; flex-shrink:0;}
+  #turn-text{font-size:13.5px; line-height:1.3;}
+  #turn-dist{font-size:11px; color:var(--text-dim); margin-top:2px;}
+
+  /* Map inset */
+  #map-wrap{
+    position:fixed; z-index:25;
+    width:132px; height:132px; right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+    border-radius:16px; overflow:hidden; border:1px solid var(--line);
+    box-shadow:0 6px 20px rgba(0,0,0,.5);
+    transition:all .25s ease;
+  }
+  #map-wrap.expanded{
+    width:calc(100% - 28px); height:52%;
+    right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+  }
+  #map{width:100%; height:100%; background:#1b1f26;}
+  #map-toggle{
+    position:absolute; top:6px; right:6px; z-index:30;
+    width:26px; height:26px; border-radius:8px;
+    background:rgba(11,13,16,.7); border:1px solid var(--line);
+    color:var(--text); font-size:13px; display:flex; align-items:center; justify-content:center;
+  }
+
+  .incident-popup{font-family:'Space Grotesk', sans-serif; font-size:13px; color:#1a1200;}
+  .incident-popup .sev{font-weight:700; display:block; margin-bottom:2px;}
+
+  /* Bottom controls */
+  #hud-bottom{
+    position:fixed; left:0; right:0; bottom:0; z-index:20;
+    padding:10px 16px calc(env(safe-area-inset-bottom) + 14px);
+    background:linear-gradient(to top, rgba(0,0,0,.75), transparent);
+  }
+  #search-fields{display:block;}
+  #search-fields.hidden{display:none;}
+  #start-row{margin-bottom:8px; position:relative;}
+  #start-input{
+    width:100%; background:rgba(20,23,28,.55); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:12px;
+    padding:9px 14px; color:var(--text-dim); font-family:inherit; font-size:13px;
+  }
+  #start-input:focus{color:var(--text);}
+  #dest-row{display:flex; gap:8px; margin-bottom:10px; position:relative;}
+
+  .suggest-list{
+    display:none; position:absolute; left:0; right:0; bottom:calc(100% + 6px);
+    background:rgba(20,23,28,.95); backdrop-filter:blur(8px);
+    border:1px solid var(--line); border-radius:12px; overflow:hidden;
+    max-height:180px; overflow-y:auto; z-index:35;
+  }
+  .suggest-list.show{display:block;}
+  .suggest-item{
+    padding:10px 14px; font-size:13px; color:var(--text);
+    border-top:1px solid var(--line);
+  }
+  .suggest-item:first-child{border-top:none;}
+  .suggest-item:active{background:var(--panel-2);}
+  #dest-input{
+    flex:1; background:rgba(20,23,28,.72); backdrop-filter:blur(6px);
+    border:1px solid var(--line); border-radius:12px;
+    padding:11px 14px; color:var(--text); font-family:inherit; font-size:14px;
+  }
+  #dest-input::placeholder{color:var(--text-dim);}
+  #dest-go{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:12px;
+    color:var(--teal); padding:0 16px; font-family:inherit; font-size:14px; font-weight:500;
+  }
+  #route-summary{
+    display:none; flex-direction:column; gap:10px;
+    margin:0 2px 10px; padding:0;
+  }
+  #route-summary.show{display:flex;}
+  #route-info-row{
+    display:flex; justify-content:space-between; align-items:center;
+    font-size:12px; color:var(--text-dim); padding:0 2px;
+  }
+  #route-summary .val{color:var(--text); font-weight:500;}
+  #route-summary-actions{display:flex; gap:4px;}
+  #route-edit{color:var(--teal); font-family:inherit; background:none; border:none; font-size:12px; padding:4px;}
+  #route-clear{color:var(--danger); font-family:inherit; background:none; border:none; font-size:12px; padding:4px;}
+  #route-start{
+    width:100%; background:var(--amber); color:#1a1200; border:none; border-radius:12px;
+    padding:13px; font-family:inherit; font-size:15px; font-weight:700;
+  }
+  #route-start.following{background:var(--panel-2); color:var(--teal); border:1px solid var(--teal);}
+
+  /* Clips drawer */
+  #clips-sheet{
+    position:fixed; inset:0; z-index:40; display:none;
+    background:rgba(6,7,9,.7); backdrop-filter:blur(4px);
+  }
+  #clips-sheet.show{display:block;}
+  #clips-panel{
+    position:absolute; left:0; right:0; bottom:0;
+    max-height:72%; overflow-y:auto;
+    background:var(--panel); border-radius:22px 22px 0 0;
+    padding:18px 16px calc(env(safe-area-inset-bottom) + 20px);
+    border-top:1px solid var(--line);
+  }
+  #clips-panel h2{font-size:16px; margin:0 0 4px;}
+  #clips-panel .hint{font-size:12px; color:var(--text-dim); margin:0 0 16px;}
+  .clip-row{
+    display:flex; align-items:center; gap:12px;
+    padding:10px 0; border-top:1px solid var(--line);
+  }
+  .clip-row:first-of-type{border-top:none;}
+  .clip-meta{flex:1;}
+  .clip-name{font-size:14px;}
+  .clip-time{font-size:12px; color:var(--text-dim);}
+  .clip-dl{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    color:var(--teal); padding:8px 14px; font-family:inherit; font-size:13px;
+  }
+  #close-clips{
+    position:absolute; top:14px; right:16px;
+    width:30px; height:30px; border-radius:50%;
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+  }
+
+  #permission-gate{
+    position:fixed; inset:0; z-index:100; background:var(--asphalt);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:32px; text-align:center; gap:18px;
+  }
+  #permission-gate h1{font-size:22px; margin:0; font-weight:700;}
+  #permission-gate p{font-size:14px; color:var(--text-dim); line-height:1.5; max-width:320px; margin:0;}
+  #permission-gate button{
+    background:var(--amber); color:#1a1200; border:none; border-radius:12px;
+    padding:14px 28px; font-family:inherit; font-size:15px; font-weight:700;
+  }
+  #permission-error{color:var(--danger); font-size:13px; max-width:320px;}
+</style>
 </head>
 <body>
-<div id="app-container">
-    <div id="video-container">
-        <video id="webcam-raw" autoplay playsinline muted></video>
-        <canvas id="dashcam-canvas"></canvas>
-    </div>
-    <div id="map-container">
-        <div id="map"></div>
-        <div id="traffic-legend">
-            <div class="legend-item"><div class="legend-color" style="background:var(--accent-green)"></div>Frei</div>
-            <div class="legend-item"><div class="legend-color" style="background:var(--accent-orange)"></div>Zähflüssig</div>
-            <div class="legend-item"><div class="legend-color" style="background:var(--accent-red)"></div>Stau</div>
-        </div>
-    </div>
-    <div id="titelleiste-top">
-        <div class="leisten-panel leiste-links" id="rec-status-group">
-            <div class="rec-indicator"></div>
-            <span id="timer-display">00:00</span>
-            <button class="icon-btn" onclick="openClipsModal()">🎞️<span class="badge" id="clips-badge">0</span></button>
-        </div>
-        <div id="turn-instruction-banner">Route initialisiert</div>
-        <div class="leisten-panel leiste-rechts">
-            <button class="icon-btn" title="Ansichten tauschen" onclick="swapViewports()">⇄</button>
-            <button class="icon-btn" id="toggle-inset-btn" title="Minimieren" onclick="toggleMapInset()">👁️</button>
-            <button class="icon-btn" title="Einstellungen" onclick="openSettingsModal()">⚙️</button>
-            <div class="tacho-box">
-                <span id="speed-display">-- km/h</span>
-                <div id="speed-limit-sign">--</div>
-            </div>
-            <div onclick="toggleRecordingEngine()" style="display: flex; align-items: center; margin-left: 4px;">
-                <div class="rec-button-outer"><div class="rec-button-inner"></div></div>
-            </div>
-        </div>
-    </div>
-    <div id="bedienung-bottom">
-        <div class="bottom-panel" id="search-panel">
-            <div class="search-group">
-                <input type="text" id="target-search" placeholder="Zieladresse oder Koordinaten..." oninput="handleSearchAutocomplete(this.value)" autocomplete="off">
-                <div id="suggestions" class="suggestions-box"></div>
-            </div>
-            <button id="calc-route-btn" onclick="executeRouteCalculation()">Los</button>
-        </div>
-        <div class="bottom-panel" id="route-summary-box">
-            <div class="summary-text" id="summary-info-text">Route wird berechnet...</div>
-            <div class="summary-buttons">
-                <button class="btn-secondary" onclick="resetNavigationState()">Bearbeiten</button>
-                <button id="start-nav-btn" onclick="triggerNavigationGuidance()">▶ Navigation starten</button>
-            </div>
-        </div>
-    </div>
-    <div id="settings-modal" class="fullscreen-overlay">
-        <div class="modal-content">
-            <h2>Einstellungen</h2>
-            <div class="setting-row">
-                <label for="tomtom-key-input">TomTom Developer API-Key</label>
-                <input type="text" id="tomtom-key-input" placeholder="Hinterlege tomtom key...">
-            </div>
-            <div class="setting-row">
-                <label for="camera-select">Kameraauswahl</label>
-                <select id="camera-select" onchange="restartCameraStream()"></select>
-            </div>
-            <div class="setting-row">
-                <label for="resolution-select">Videoauflösung</label>
-                <select id="resolution-select" onchange="restartCameraStream()">
-                    <option value="max">Maximal verfügbar</option>
-                    <option value="1080">Full HD (1920×1080)</option>
-                    <option value="720" selected>HD (1280×720)</option>
-                </select>
-            </div>
-            <div class="setting-row">
-                <label for="loop-select">Loop-Aufnahme Intervall</label>
-                <select id="loop-select">
-                    <option value="0">Aus — durchgehend aufnehmen</option>
-                    <option value="5" selected>Letzte 5 Minuten</option>
-                    <option value="10">Letzte 10 Minuten</option>
-                    <option value="15">Letzte 15 Minuten</option>
-                    <option value="30">Letzte 30 Minuten</option>
-                </select>
-            </div>
-            <div class="setting-row checkbox-row">
-                <input type="checkbox" id="mic-enabled-check" checked>
-                <label for="mic-enabled-check" style="display:inline; margin:0;">Mikrofon bei Aufnahme aktivieren</label>
-            </div>
-            <div class="setting-row" style="margin-top: 25px; display: flex; gap: 10px;">
-                <button onclick="commitSettings()" style="background:var(--accent-green);">Übernehmen</button>
-                <button onclick="hideOverlayModal('settings-modal')" class="btn-secondary">Abbrechen</button>
-            </div>
-        </div>
-    </div>
-    <div id="clips-modal" class="fullscreen-overlay">
-        <div class="modal-content">
-            <h2>Aufnahmen dieser Sitzung</h2>
-            <div class="clip-list-container" id="clips-list"></div>
-            <button onclick="hideOverlayModal('clips-modal')" class="btn-secondary">Schliessen</button>
-        </div>
-    </div>
-</div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-    const APP_VERSION = "2.0.0";
-    let mapObject, userMarkerObject;
-    let geoCurrentLat = 47.3769, geoCurrentLon = 8.5417;
-    let currentMovingSpeedKmh = 0;
-    let liveTrafficPolylines = [];
-    let activeNavigationMode = false;
-    let mapInsetStateVisible = true;
-    let searchDebounceTimer = null;
-    let ttsVoiceEngine = window.speechSynthesis;
-    let localStreamInstance = null, activeMediaRecorder = null, recordedChunksCollection = [];
-    let loopWatchdogTimer = null, sessionClipsDatabase = [];
-    let canvasRenderContext = null, canvasAnimationId = null;
-    let recordingStopwatchInterval = null, recordingElapsedTimeSeconds = 0, isRecording = false;
-    window.aktuelleRoutenPunkte = null; window.aktuelleRoutenSegmente = []; let lastSpokenInstructionIndex = -1;
 
-    window.addEventListener('DOMContentLoaded', () => {
-        setupLeafletMap(); setupGeolocationWatch();
-        populateAvailableCameraDevices().then(() => { initiateCameraPipeline(); });
-        restoreStoredPreferences(); initializeCanvasContext();
+<div id="permission-gate">
+  <h1>Fahrspur</h1>
+  <p>Dashcam-Aufnahme und Navigation in einer Ansicht. Für Kamera, Mikrofon und Standort brauche ich kurz deine Freigabe.</p>
+  <button id="grant-access">Zugriff erlauben & starten</button>
+  <p id="permission-error"></p>
+</div>
+
+<div id="stage">
+  <video id="camera" autoplay muted playsinline></video>
+  <canvas id="overlayCanvas"></canvas>
+</div>
+
+<div id="hud-top">
+  <div id="hud-top-left">
+    <div class="rec-chip">
+      <div class="rec-dot" id="recDot"></div>
+      <span id="timer" class="mono">00:00</span>
+    </div>
+    <button class="hud-icon-btn" id="clips-btn" title="Aufnahmen">🎞️<span id="clips-count-badge"></span></button>
+  </div>
+  <div id="hud-top-right">
+    <button class="hud-icon-btn" id="swap-btn" title="Ansicht tauschen">⇄</button>
+    <button class="hud-icon-btn" id="inset-toggle-btn" title="Kleines Fenster ein-/ausblenden">🗖</button>
+    <button class="hud-icon-btn" id="inset-pos-btn" title="Position wechseln">⇲</button>
+    <button class="hud-icon-btn" id="settings-btn" title="Einstellungen">⚙</button>
+    <button id="rec-btn-top" title="Aufnahme"><div class="core"></div></button>
+    <div id="speed-chip"><span id="speed-val" class="mono">--</span><span id="speed-unit">km/h</span></div>
+  </div>
+</div>
+
+<div id="camera-settings-sheet">
+  <div id="camera-settings-panel">
+    <h2>Einstellungen <span id="app-version-tag"></span></h2>
+    <label class="cs-toggle-row">
+      <span>Mikrofon bei Aufnahme</span>
+      <input type="checkbox" id="settings-mic-enable" checked />
+    </label>
+    <label class="cs-label">Kamera</label>
+    <select id="camera-select"></select>
+    <label class="cs-label">Auflösung</label>
+    <select id="resolution-select">
+      <option value="720p">HD — 1280×720</option>
+      <option value="1080p" selected>Full HD — 1920×1080</option>
+      <option value="max">Maximal verfügbar</option>
+    </select>
+    <label class="cs-label">Format</label>
+    <select id="format-select"></select>
+    <label class="cs-label">Loop-Aufnahme</label>
+    <select id="loop-select">
+      <option value="0">Aus — durchgehend aufnehmen</option>
+      <option value="5">Letzte 5 Minuten</option>
+      <option value="10">Letzte 10 Minuten</option>
+      <option value="15">Letzte 15 Minuten</option>
+      <option value="30">Letzte 30 Minuten</option>
+    </select>
+    <p class="cs-hint">Bei aktivem Loop werden ältere Ausschnitte automatisch gelöscht — Clips, die du behalten willst, vorher unter 🎞️ speichern.</p>
+
+    <label class="cs-label">Live-Verkehr (TomTom)</label>
+    <input id="settings-traffic-key" type="text" placeholder="TomTom API-Key (kostenlos)" autocapitalize="off" autocorrect="off" spellcheck="false" />
+    <label class="cs-toggle-row">
+      <span>Verkehrsanzeige aktiv</span>
+      <input type="checkbox" id="settings-traffic-enable" />
+    </label>
+    <p class="cs-hint">Kostenlosen Key auf developer.tomtom.com anlegen. Wird nur lokal in diesem Browser gespeichert.</p>
+
+    <div id="camera-settings-actions">
+      <button id="camera-settings-cancel">Abbrechen</button>
+      <button id="camera-settings-apply">Übernehmen</button>
+    </div>
+  </div>
+</div>
+
+<div id="turn-banner">
+  <div id="turn-icon">↑</div>
+  <div>
+    <div id="turn-text">Route berechnen...</div>
+    <div id="turn-dist"></div>
+  </div>
+</div>
+
+<div id="map-wrap">
+  <button id="map-toggle">⤢</button>
+  <div id="map"></div>
+</div>
+
+<div id="hud-bottom">
+  <div id="search-fields">
+    <div id="start-row">
+      <input id="start-input" type="text" placeholder="Start: aktueller Standort" autocomplete="off" />
+      <div id="start-suggest" class="suggest-list"></div>
+    </div>
+    <div id="dest-row">
+      <input id="dest-input" type="text" placeholder="Ziel oder Koordinaten (47.37, 8.54)" autocomplete="off" />
+      <button id="dest-go">Los</button>
+      <div id="dest-suggest" class="suggest-list"></div>
+    </div>
+  </div>
+  <div id="route-summary">
+    <div id="route-info-row">
+      <span>Ankunft ca. <span class="val" id="eta-val">—</span> · noch <span class="val" id="dist-val">—</span></span>
+      <span id="route-summary-actions">
+        <button id="route-edit">Bearbeiten</button>
+        <button id="route-clear">Beenden</button>
+      </span>
+    </div>
+    <button id="route-start">▶ Navigation starten</button>
+  </div>
+</div>
+
+<div id="clips-sheet">
+  <div id="clips-panel">
+    <button id="close-clips">✕</button>
+    <h2>Aufnahmen dieser Sitzung</h2>
+    <p class="hint">Clips liegen nur im Speicher dieses Tabs — vor dem Schließen der Seite herunterladen.</p>
+    <div id="clips-list"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  // ---------- State ----------
+  let stream = null, micStream = null, mediaRecorder = null, recordedChunks = [];
+  let recording = false, recStartTime = 0, timerInterval = null;
+  let map, meMarker, routeLine, routeSteps = [], nextStepIndex = 0;
+  let lastPos = null, currentSpeedKmh = null, micEnabled = true;
+  let clipCounter = 0;
+  let currentDeviceId = null;
+  const RES_PRESETS = {
+    '720p': { width: 1280, height: 720 },
+    '1080p': { width: 1920, height: 1080 },
+    'max': { width: 3840, height: 2160 }
+  };
+  let recRes = RES_PRESETS['1080p'];
+  const FORMAT_CANDIDATES = [
+    { label: 'MP4 (H.264) — läuft überall', mime: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', ext: 'mp4' },
+    { label: 'MP4 (H.264)', mime: 'video/mp4', ext: 'mp4' },
+    { label: 'WebM (VP9) — kleiner, weniger kompatibel', mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
+    { label: 'WebM (VP8)', mime: 'video/webm;codecs=vp8,opus', ext: 'webm' },
+    { label: 'WebM (Standard)', mime: 'video/webm', ext: 'webm' }
+  ];
+  let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
+
+  const APP_VERSION = '2.1.0';
+  document.addEventListener('DOMContentLoaded', () => {
+    const tag = document.getElementById('app-version-tag');
+    if (tag) tag.textContent = 'v' + APP_VERSION;
+  });
+
+  const el = id => document.getElementById(id);
+  const cameraEl = el('camera');
+  const canvas = el('overlayCanvas');
+  const ctx = canvas.getContext('2d');
+
+  function fitCanvas(){
+    canvas.width = recRes.width;
+    canvas.height = recRes.height;
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  function drawCover(ctx, video, cw, ch){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    const scale = Math.max(cw / vw, ch / vh);
+    const dw = vw * scale, dh = vh * scale;
+    const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+    ctx.drawImage(video, dx, dy, dw, dh);
+  }
+
+  async function openCamera(deviceId, preset){
+    const videoConstraints = { facingMode: { ideal: 'environment' } };
+    if (deviceId) { delete videoConstraints.facingMode; videoConstraints.deviceId = { exact: deviceId }; }
+    if (preset && preset !== RES_PRESETS['max']) {
+      videoConstraints.width = { ideal: preset.width };
+      videoConstraints.height = { ideal: preset.height };
+    } else {
+      videoConstraints.width = { ideal: 3840 };
+      videoConstraints.height = { ideal: 2160 };
+    }
+    const newStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = newStream;
+    cameraEl.srcObject = stream;
+  }
+
+  function detectSupportedFormats(){
+    const supported = FORMAT_CANDIDATES.filter(f => {
+      try { return MediaRecorder.isTypeSupported(f.mime); } catch(e){ return false; }
+    });
+    return supported.length ? supported : [{ label: 'WebM (Browser-Standard)', mime: '', ext: 'webm' }];
+  }
+
+  // ---------- Permission gate ----------
+  el('grant-access').addEventListener('click', async () => {
+    el('permission-error').textContent = '';
+    try {
+      await openCamera(null, recRes);
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch(e){ micStream = null; micEnabled = false; }
+
+      fitCanvas();
+      const supportedFormats = detectSupportedFormats();
+      selectedFormat = supportedFormats[0];
+
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(onPosition, onPosError, {
+          enableHighAccuracy:true, maximumAge:1000, timeout:8000
+        });
+      }
+
+      initMap();
+      requestAnimationFrame(drawLoop);
+      requestWakeLock();
+      updateClipsBadge();
+      el('permission-gate').style.display = 'none';
+    } catch (err) {
+      el('permission-error').textContent = 'Zugriff verweigert oder nicht verfügbar: ' + err.message + '. Diese Seite muss über HTTPS laufen (nicht als lokale Datei geöffnet).';
+    }
+  });
+
+  // ---------- Geolocation ----------
+  const NAV_ZOOM = 17; // "Straße voraus"-Zoomstufe während aktiver Navigation
+  let isNavigating = false;
+
+  function onPosition(p){
+    const { latitude, longitude, speed, accuracy } = p.coords;
+    lastPos = { lat: latitude, lon: longitude };
+    lastGpsAccuracy = (typeof accuracy === 'number') ? accuracy : null;
+    if (typeof speed === 'number' && speed !== null && !isNaN(speed)) {
+      currentSpeedKmh = Math.max(0, speed * 3.6);
+    }
+    el('speed-val').textContent = currentSpeedKmh !== null ? Math.round(currentSpeedKmh) : '--';
+
+    if (map && meMarker) {
+      meMarker.setLatLng([latitude, longitude]);
+      if (!map.__userMoved) {
+        const targetZoom = isNavigating ? Math.max(map.getZoom(), NAV_ZOOM) : map.getZoom();
+        map.setView([latitude, longitude], targetZoom);
+      }
+    }
+    checkRouteProgress();
+  }
+  function onPosError(){ el('speed-val').textContent = '--'; }
+
+  // ---------- Map ----------
+  function initMap(){
+    map = L.map('map', { zoomControl:false, attributionControl:false }).setView([47.3769, 8.5417], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
+    L.control.zoom({ position: 'topright' }).addTo(map);
+    meMarker = L.circleMarker([47.3769, 8.5417], {
+      radius:7, color:'#ff9d2f', fillColor:'#ff9d2f', fillOpacity:1, weight:2
+    }).addTo(map);
+    map.on('dragstart', () => {
+      map.__userMoved = true;
+      if (isNavigating) {
+        el('route-start').classList.remove('following');
+        el('route-start').textContent = '◎ Zentrieren';
+      }
+    });
+  }
+
+  el('map-toggle').addEventListener('click', () => {
+    el('map-wrap').classList.toggle('expanded');
+    setTimeout(() => { map.invalidateSize(); }, 260);
+  });
+
+  // ---------- Traffic (TomTom, optional API key) — verwaltet über ⚙ Einstellungen ----------
+  let trafficLayer = null, incidentMarkers = [], trafficOn = false, incidentTimer = null;
+  let lastIncidentFetch = 0;
+  const INCIDENT_MIN_GAP_MS = 45000; // nie öfter als alle 45s abfragen, egal wie oft die Karte sich bewegt
+  const TT_KEY_STORAGE = 'fahrspur_tomtom_key';
+
+  function getTomTomKey(){ return localStorage.getItem(TT_KEY_STORAGE) || ''; }
+
+  function enableTraffic(key){
+    trafficLayer = L.tileLayer(
+      `https://api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${key}&t={t}`,
+      { maxZoom: 22, opacity: 0.85 }
+    ).addTo(map);
+    // Kachel-Cache-Buster: alle 3 Minuten neu anfragen statt auf alten Browser-Cache zu vertrauen
+    let tBucket = Math.floor(Date.now() / 180000);
+    setInterval(() => {
+      const nb = Math.floor(Date.now() / 180000);
+      if (nb !== tBucket && trafficLayer) {
+        tBucket = nb;
+        trafficLayer.setUrl(`https://api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${key}&t=${tBucket}`);
+      }
+    }, 15000);
+    trafficOn = true;
+    refreshIncidents(true);
+    incidentTimer = setInterval(() => refreshIncidents(true), 45000);
+    map.on('moveend', onMoveEndRefresh);
+  }
+
+  function onMoveEndRefresh(){ refreshIncidents(false); }
+
+  function disableTraffic(){
+    if (trafficLayer) { map.removeLayer(trafficLayer); trafficLayer = null; }
+    incidentMarkers.forEach(m => map.removeLayer(m));
+    incidentMarkers = [];
+    trafficOn = false;
+    clearInterval(incidentTimer);
+    map.off('moveend', onMoveEndRefresh);
+  }
+
+  async function refreshIncidents(force){
+    if (!trafficOn) return;
+    const now = Date.now();
+    if (!force && (now - lastIncidentFetch) < INCIDENT_MIN_GAP_MS) return;
+    lastIncidentFetch = now;
+    const key = getTomTomKey();
+    const b = map.getBounds();
+    const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+    const fields = '{incidents{type,geometry{type,coordinates},properties{iconCategory,magnitudeOfDelay,events{description}}}}';
+    const url = `https://api.tomtom.com/traffic/services/5/incidentDetails?key=${key}&bbox=${bbox}&fields=${encodeURIComponent(fields)}&language=de-DE`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return; // z.B. ungültiger Key oder Kontingent erreicht
+      const data = await res.json();
+      incidentMarkers.forEach(m => map.removeLayer(m));
+      incidentMarkers = [];
+      (data.incidents || []).forEach(inc => {
+        const coords = inc.geometry && inc.geometry.coordinates;
+        if (!coords) return;
+        const point = inc.geometry.type === 'Point' ? coords : coords[Math.floor(coords.length / 2)];
+        const desc = (inc.properties.events && inc.properties.events[0] && inc.properties.events[0].description) || 'Verkehrsstörung';
+        const sevWords = ['Unbekannt','Gering','Mäßig','Erheblich','Stau'];
+        const sev = sevWords[inc.properties.magnitudeOfDelay] || 'Meldung';
+        const marker = L.circleMarker([point[1], point[0]], {
+          radius: 6, color: '#ff9d2f', fillColor: '#ff9d2f', fillOpacity: .9, weight: 1
+        }).bindPopup(`<div class="incident-popup"><span class="sev">${sev}</span>${desc}</div>`);
+        marker.addTo(map);
+        incidentMarkers.push(marker);
+      });
+    } catch (e) { /* still, Verbindung evtl. offline */ }
+  }
+
+  // ---------- Routing (Nominatim geocode + OSRM route) ----------
+  el('dest-go').addEventListener('click', planRoute);
+  el('dest-input').addEventListener('keydown', e => { if (e.key === 'Enter') planRoute(); });
+  el('start-input').addEventListener('keydown', e => { if (e.key === 'Enter') planRoute(); });
+
+  // ---------- Autocomplete (Nominatim) ----------
+  const startResolved = { coord: null };
+  const destResolved = { coord: null };
+
+  function setupAutocomplete(inputId, listId, resolvedStore){
+    const input = el(inputId), list = el(listId);
+    let debounceTimer = null, controller = null;
+
+    input.addEventListener('input', () => {
+      resolvedStore.coord = null;
+      clearTimeout(debounceTimer);
+      const q = input.value.trim();
+      if (q.length < 3 || parseCoordInput(q)) { list.innerHTML = ''; list.classList.remove('show'); return; }
+      debounceTimer = setTimeout(() => fetchSuggestions(q), 400);
+    });
+    input.addEventListener('focus', () => { if (list.children.length) list.classList.add('show'); });
+    input.addEventListener('blur', () => setTimeout(() => list.classList.remove('show'), 200));
+
+    async function fetchSuggestions(q){
+      if (controller) controller.abort();
+      controller = new AbortController();
+      try {
+        const res = await fetch(
+          'https://nominatim.openstreetmap.org/search?format=json&limit=5&q=' + encodeURIComponent(q),
+          { signal: controller.signal }
+        );
+        const data = await res.json();
+        renderSuggestions(data);
+      } catch (e) { /* abgebrochen oder offline — ignorieren */ }
+    }
+
+    function renderSuggestions(data){
+      list.innerHTML = '';
+      if (!data.length) { list.classList.remove('show'); return; }
+      data.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'suggest-item';
+        row.textContent = item.display_name;
+        row.addEventListener('mousedown', e => e.preventDefault()); // Blur vor Klick verhindern
+        row.addEventListener('click', () => {
+          input.value = item.display_name;
+          resolvedStore.coord = { lat: parseFloat(item.lat), lon: parseFloat(item.lon) };
+          list.classList.remove('show');
+        });
+        list.appendChild(row);
+      });
+      list.classList.add('show');
+    }
+  }
+
+  setupAutocomplete('start-input', 'start-suggest', startResolved);
+  setupAutocomplete('dest-input', 'dest-suggest', destResolved);
+
+  async function resolveField(text, resolvedStore){
+    if (resolvedStore.coord) return resolvedStore.coord;
+    return await resolvePoint(text);
+  }
+
+  function parseCoordInput(q){
+    // Erkennt "lat, lon" oder "lat lon" (Dezimalgrad, mit optionalem Vorzeichen)
+    const m = q.match(/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
+    if (!m) return null;
+    const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+    if (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return { lat, lon };
+  }
+
+  async function resolvePoint(q){
+    const coord = parseCoordInput(q);
+    if (coord) return coord;
+    const res = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
+    const data = await res.json();
+    if (!data.length) return null;
+    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  }
+
+  async function planRoute(){
+    const q = el('dest-input').value.trim();
+    const startQ = el('start-input').value.trim();
+    if (!q) return;
+    if (!startQ && !lastPos) { el('turn-text').textContent = 'Kein GPS-Standort verfügbar — Start manuell eingeben.'; el('turn-banner').classList.add('show'); return; }
+    el('turn-text').textContent = 'Suche Ziel...';
+    el('turn-banner').classList.add('show');
+    try {
+      const dest = await resolveField(q, destResolved);
+      if (!dest) { el('turn-text').textContent = 'Ziel nicht gefunden.'; return; }
+
+      let start = lastPos;
+      if (startQ) {
+        el('turn-text').textContent = 'Suche Start...';
+        const resolvedStart = await resolveField(startQ, startResolved);
+        if (!resolvedStart) { el('turn-text').textContent = 'Startort nicht gefunden.'; return; }
+        start = resolvedStart;
+      }
+
+      const url = `https://router.project-osrm.org/route/v1/driving/${start.lon},${start.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson&steps=true`;
+      const routeRes = await fetch(url);
+      const routeData = await routeRes.json();
+      if (!routeData.routes || !routeData.routes.length) { el('turn-text').textContent = 'Keine Route gefunden.'; return; }
+
+      const route = routeData.routes[0];
+      drawRoute(route);
+      routeSteps = route.legs[0].steps;
+      nextStepIndex = 0;
+      showStep(0);
+
+      el('route-summary').classList.add('show');
+      el('eta-val').textContent = new Date(Date.now() + route.duration * 1000)
+        .toLocaleTimeString('de-CH', { hour:'2-digit', minute:'2-digit' });
+      el('dist-val').textContent = (route.distance / 1000).toFixed(1) + ' km';
+      map.__userMoved = false;
+      isNavigating = false;
+      el('route-start').classList.remove('following');
+      el('route-start').textContent = '▶ Navigation starten';
+      el('search-fields').classList.add('hidden');
+    } catch (e) {
+      el('turn-text').textContent = 'Routing fehlgeschlagen (Verbindung prüfen).';
+    }
+  }
+
+  function drawRoute(route){
+    if (routeLine) map.removeLayer(routeLine);
+    const latlngs = route.geometry.coordinates.map(c => [c[1], c[0]]);
+    routeLine = L.polyline(latlngs, { color:'#49d5c3', weight:5, opacity:.85 }).addTo(map);
+    map.fitBounds(routeLine.getBounds(), { padding:[20,20] });
+  }
+
+  function maneuverIcon(type, modifier){
+    if (type === 'arrive') return '🏁';
+    if (type === 'depart') return '↑';
+    const m = modifier || '';
+    if (m.includes('left')) return '↰';
+    if (m.includes('right')) return '↱';
+    if (m.includes('uturn')) return '↶';
+    return '↑';
+  }
+
+  function showStep(i){
+    const step = routeSteps[i];
+    if (!step) return;
+    el('turn-icon').textContent = maneuverIcon(step.maneuver.type, step.maneuver.modifier);
+    el('turn-text').textContent = step.name ? `${verbFor(step.maneuver)} auf ${step.name}` : verbFor(step.maneuver);
+    el('turn-dist').textContent = Math.round(step.distance) + ' m';
+    el('turn-banner').classList.add('show');
+  }
+
+  function verbFor(man){
+    const m = man.modifier || '';
+    if (man.type === 'arrive') return 'Ziel erreicht';
+    if (man.type === 'depart') return 'Los geht’s';
+    if (m.includes('left')) return 'Links abbiegen';
+    if (m.includes('right')) return 'Rechts abbiegen';
+    if (m.includes('straight')) return 'Geradeaus weiter';
+    if (m.includes('uturn')) return 'Wenden';
+    return 'Weiterfahren';
+  }
+
+  function distMeters(a, b){
+    const R = 6371000, toRad = d => d * Math.PI / 180;
+    const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+    const s = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  function checkRouteProgress(){
+    if (!routeSteps.length || !lastPos || nextStepIndex >= routeSteps.length) return;
+    const step = routeSteps[nextStepIndex];
+    const loc = step.maneuver.location; // [lon, lat]
+    const d = distMeters(lastPos, { lat: loc[1], lon: loc[0] });
+    el('turn-dist').textContent = Math.round(d) + ' m';
+    if (d < 40) {
+      speak(verbFor(step.maneuver) + (step.name ? ' auf ' + step.name : ''));
+      nextStepIndex++;
+      if (nextStepIndex < routeSteps.length) showStep(nextStepIndex);
+      else {
+        el('turn-text').textContent = 'Ziel erreicht';
+        el('turn-icon').textContent = '🏁';
+      }
+    }
+  }
+
+  function speak(text){
+    if (!('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'de-DE';
+    speechSynthesis.speak(u);
+  }
+
+  el('route-edit').addEventListener('click', () => {
+    el('search-fields').classList.remove('hidden');
+    if (!document.body.classList.contains('swap-view')) {
+      el('swap-btn').click();
+    }
+  });
+
+  el('route-start').addEventListener('click', () => {
+    if (!lastPos) return;
+    isNavigating = true;
+    map.__userMoved = false;
+    map.setView([lastPos.lat, lastPos.lon], NAV_ZOOM);
+    el('route-start').classList.add('following');
+    el('route-start').textContent = '◎ Folgt der Fahrt — antippen zum Zentrieren';
+  });
+
+  el('route-clear').addEventListener('click', () => {
+    if (routeLine) map.removeLayer(routeLine);
+    routeSteps = []; nextStepIndex = 0;
+    isNavigating = false;
+    el('route-summary').classList.remove('show');
+    el('turn-banner').classList.remove('show');
+    el('dest-input').value = '';
+    el('start-input').value = '';
+    el('search-fields').classList.remove('hidden');
+  });
+
+  // ---------- Overlay drawing (burned-in HUD onto canvas for recording) ----------
+  function drawLoop(){
+    if (cameraEl.readyState >= 2) {
+      ctx.clearRect(0,0,canvas.width, canvas.height);
+      drawCover(ctx, cameraEl, canvas.width, canvas.height);
+
+      const pad = Math.round(canvas.width / 110);
+      const fontSize = Math.max(14, Math.round(canvas.width / 85));
+      ctx.font = `600 ${fontSize}px "JetBrains Mono", monospace`;
+      ctx.textBaseline = 'bottom';
+      const now = new Date();
+      const stamp = now.toLocaleDateString('de-CH') + '  ' + now.toLocaleTimeString('de-CH');
+      const coord = lastPos ? `${lastPos.lat.toFixed(5)}, ${lastPos.lon.toFixed(5)}` : '— kein GPS —';
+      const speedTxt = currentSpeedKmh !== null ? Math.round(currentSpeedKmh) + ' km/h' : '-- km/h';
+      const line = `${stamp}   ${coord}   ${speedTxt}`;
+
+      const metrics = ctx.measureText(line);
+      const boxH = fontSize + 12;
+      ctx.fillStyle = 'rgba(0,0,0,.45)';
+      ctx.fillRect(0, canvas.height - boxH - pad*0.4, metrics.width + pad*2, boxH + 6);
+      ctx.fillStyle = '#ffb100';
+      ctx.fillText(line, pad, canvas.height - pad*0.6);
+    }
+    requestAnimationFrame(drawLoop);
+  }
+
+  // ---------- Recording ----------
+  let segmentTimer = null, continueAfterStop = false, loopMinutes = 0, segmentLengthMinutes = 5;
+  let clips = []; // { id, url, blob, name, time }
+
+  el('rec-btn-top').addEventListener('click', () => {
+    recording ? stopRecording() : startRecording();
+  });
+
+  function startSegmentRecorder(){
+    const canvasStream = canvas.captureStream(30);
+    let combined = canvasStream;
+    if (micEnabled && micStream) {
+      combined = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...micStream.getAudioTracks()
+      ]);
+    }
+    let options = (selectedFormat && selectedFormat.mime) ? { mimeType: selectedFormat.mime } : {};
+
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(combined, options);
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = handleSegmentStop;
+    mediaRecorder.start(1000);
+  }
+
+  function startRecording(){
+    continueAfterStop = false;
+    startSegmentRecorder();
+
+    recording = true;
+    recStartTime = Date.now();
+    el('rec-btn-top').classList.add('recording');
+    el('recDot').classList.add('live');
+    timerInterval = setInterval(updateTimer, 500);
+
+    if (loopMinutes > 0) {
+      segmentLengthMinutes = Math.max(1, Math.round(loopMinutes / 3));
+      segmentTimer = setInterval(() => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          continueAfterStop = true;
+          mediaRecorder.stop();
+        }
+      }, segmentLengthMinutes * 60000);
+    }
+  }
+
+  function stopRecording(){
+    continueAfterStop = false;
+    clearInterval(segmentTimer);
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  }
+
+  function updateTimer(){
+    const s = Math.floor((Date.now() - recStartTime) / 1000);
+    const mm = String(Math.floor(s/60)).padStart(2,'0');
+    const ss = String(s%60).padStart(2,'0');
+    el('timer').textContent = `${mm}:${ss}`;
+  }
+
+  function updateClipsBadge(){
+    const badge = el('clips-count-badge');
+    if (!badge) return;
+    if (clips && clips.length) {
+      badge.textContent = clips.length;
+      badge.classList.add('show');
+    } else {
+      badge.classList.remove('show');
+    }
+  }
+
+  function handleSegmentStop(){
+    const ext = (selectedFormat && selectedFormat.ext) || 'webm';
+    const blob = new Blob(recordedChunks, { type: (selectedFormat && selectedFormat.mime) || 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    clipCounter++;
+    clips.push({
+      id: clipCounter,
+      url, blob,
+      name: `fahrspur-clip-${clipCounter}.${ext}`,
+      time: new Date().toLocaleTimeString('de-CH')
     });
 
-    function setupLeafletMap() {
-        mapObject = L.map('map', { zoomControl: true, attributionControl: false }).setView([geoCurrentLat, geoCurrentLon], 14);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mapObject);
-        userMarkerObject = L.circleMarker([geoCurrentLat, geoCurrentLon], { radius: 9, fillColor: '#2196F3', color: '#ffffff', weight: 2.5, fillOpacity: 1 }).addTo(mapObject);
-        mapObject.zoomControl.setPosition('bottomright');
-        mapObject.on('movestart', () => {
-            if (activeNavigationMode) {
-                document.getElementById('start-nav-btn').innerText = "▶ Zentrieren";
-                document.getElementById('start-nav-btn').style.background = "var(--accent-blue)";
+    if (loopMinutes > 0) {
+      const maxSegments = Math.max(1, Math.round(loopMinutes / segmentLengthMinutes));
+      while (clips.length > maxSegments) {
+        const old = clips.shift();
+        URL.revokeObjectURL(old.url);
+      }
+    }
+    renderClipsList();
+    updateClipsBadge();
+
+    if (continueAfterStop) {
+      continueAfterStop = false;
+      startSegmentRecorder();
+    } else {
+      recording = false;
+      el('rec-btn-top').classList.remove('recording');
+      el('recDot').classList.remove('live');
+      clearInterval(timerInterval);
+      clearInterval(segmentTimer);
+      el('timer').textContent = '00:00';
+    }
+  }
+
+  function renderClipsList(){
+    const list = el('clips-list');
+    list.innerHTML = '';
+    for (let i = clips.length - 1; i >= 0; i--) {
+      const c = clips[i];
+      const row = document.createElement('div');
+      row.className = 'clip-row';
+      row.innerHTML = `
+        <div class="clip-meta">
+          <div class="clip-name">${c.name}</div>
+          <div class="clip-time">${c.time} · ${(c.blob.size/1024/1024).toFixed(1)} MB</div>
+        </div>
+        <a class="clip-dl" href="${c.url}" download="${c.name}">Speichern</a>
+      `;
+      list.appendChild(row);
+    }
+  }
+
+  // ---------- Clips sheet ----------
+  el('clips-btn').addEventListener('click', () => el('clips-sheet').classList.add('show'));
+
+  // ---------- View swap (Kamera ↔ Karte) ----------
+  el('swap-btn').addEventListener('click', () => {
+    document.body.classList.toggle('swap-view');
+    setTimeout(() => {
+      if (map) map.invalidateSize();
+      const targets = getInsetTargets();
+      const nowHidden = targets[0].classList.contains('inset-hidden');
+      el('inset-toggle-btn').classList.toggle('on', nowHidden);
+      // Aktuelle Eck-Position auf das neue Inset übertragen
+      targets.forEach(t => {
+        if (!t) return;
+        INSET_POSITIONS.forEach(p => t.classList.remove(p));
+        if (INSET_POSITIONS[insetPosIndex] !== 'pos-br') t.classList.add(INSET_POSITIONS[insetPosIndex]);
+      });
+    }, 260);
+  });
+
+  // ---------- Inset panel: einfach ein-/ausblenden ----------
+  const mapWrapEl = el('map-wrap');
+
+  function getInsetTargets(){
+    return document.body.classList.contains('swap-view') ? [cameraEl.parentElement, canvas] : [mapWrapEl];
+  }
+
+  el('inset-toggle-btn').addEventListener('click', () => {
+    const hidden = getInsetTargets()[0].classList.contains('inset-hidden');
+    getInsetTargets().forEach(t => t && t.classList.toggle('inset-hidden', !hidden));
+    el('inset-toggle-btn').classList.toggle('on', !hidden);
+    if (hidden && map) map.invalidateSize();
+  });
+
+  const INSET_POSITIONS = ['pos-br', 'pos-bl', 'pos-tr', 'pos-tl'];
+  let insetPosIndex = 0;
+
+  el('inset-pos-btn').addEventListener('click', () => {
+    insetPosIndex = (insetPosIndex + 1) % INSET_POSITIONS.length;
+    getInsetTargets().forEach(t => {
+      if (!t) return;
+      INSET_POSITIONS.forEach(p => t.classList.remove(p));
+      if (INSET_POSITIONS[insetPosIndex] !== 'pos-br') t.classList.add(INSET_POSITIONS[insetPosIndex]);
+    });
+  });
+
+  // ---------- Camera & recording settings ----------
+  el('settings-btn').addEventListener('click', async () => {
+    await populateCameraSelect();
+    populateFormatSelect();
+    // Aktuelle Werte vorauswählen
+    const resSelect = el('resolution-select');
+    for (const opt of resSelect.options) {
+      if (RES_PRESETS[opt.value] === recRes) { resSelect.value = opt.value; break; }
+    }
+    el('loop-select').value = String(loopMinutes);
+    el('settings-traffic-key').value = getTomTomKey();
+    el('settings-traffic-enable').checked = trafficOn;
+    el('settings-mic-enable').checked = micEnabled;
+    el('camera-settings-sheet').classList.add('show');
+  });
+  el('camera-settings-cancel').addEventListener('click', () => el('camera-settings-sheet').classList.remove('show'));
+
+  async function populateCameraSelect(){
+    const select = el('camera-select');
+    select.innerHTML = '';
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      cams.forEach((cam, i) => {
+        const opt = document.createElement('option');
+        opt.value = cam.deviceId;
+        opt.textContent = cam.label || `Kamera ${i + 1}`;
+        if (cam.deviceId === currentDeviceId) opt.selected = true;
+        select.appendChild(opt);
+      });
+      if (!cams.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Standardkamera';
+        select.appendChild(opt);
+      }
+    } catch(e) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Standardkamera';
+      select.appendChild(opt);
+    }
+  }
+
+  function populateFormatSelect(){
+    const select = el('format-select');
+    select.innerHTML = '';
+    const formats = detectSupportedFormats();
+    formats.forEach((f, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = f.label;
+      if (selectedFormat && f.mime === selectedFormat.mime) opt.selected = true;
+      select.appendChild(opt);
+    });
+    select.__formats = formats;
+  }
+
+  el('camera-settings-apply').addEventListener('click', async () => {
+    const camSelect = el('camera-select');
+    const resSelect = el('resolution-select');
+    const formatSelect = el('format-select');
+    const loopSelect = el('loop-select');
+
+    const deviceId = camSelect.value || null;
+    const preset = RES_PRESETS[resSelect.value] || RES_PRESETS['1080p'];
+    const formats = formatSelect.__formats || detectSupportedFormats();
+    const format = formats[parseInt(formatSelect.value, 10)] || formats[0];
+    const newLoopMinutes = parseInt(loopSelect.value, 10) || 0;
+    micEnabled = el('settings-mic-enable').checked;
+
+    el('camera-settings-apply').textContent = 'Wird angewendet...';
+    try {
+      await openCamera(deviceId, preset);
+      currentDeviceId = deviceId;
+      recRes = preset;
+      selectedFormat = format;
+      loopMinutes = newLoopMinutes;
+      fitCanvas();
+
+      if (recording) {
+        clearInterval(segmentTimer);
+        if (loopMinutes > 0) {
+          segmentLengthMinutes = Math.max(1, Math.round(loopMinutes / 3));
+          segmentTimer = setInterval(() => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+              continueAfterStop = true;
+              mediaRecorder.stop();
             }
-        });
-    }
-
-    function setupGeolocationWatch() {
-        if (navigator.geolocation) {
-            navigator.geolocation.watchPosition((pos) => {
-                geoCurrentLat = pos.coords.latitude; geoCurrentLon = pos.coords.longitude;
-                if (pos.coords.speed !== null && pos.coords.speed !== undefined) {
-                    currentMovingSpeedKmh = Math.round(pos.coords.speed * 3.6);
-                    document.getElementById('speed-display').innerText = `${currentMovingSpeedKmh} km/h`;
-                } else {
-                    currentMovingSpeedKmh = 0; document.getElementById('speed-display').innerText = `0 km/h`;
-                }
-                userMarkerObject.setLatLng([geoCurrentLat, geoCurrentLon]);
-                processRealtimeSpeedLimitsMatching(geoCurrentLat, geoCurrentLon);
-                if (activeNavigationMode && document.getElementById('start-nav-btn').innerText === "🎯 Zentrieren") {
-                    mapObject.setView([geoCurrentLat, geoCurrentLon], 17);
-                }
-            }, (err) => { console.error(err); }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+          }, segmentLengthMinutes * 60000);
         }
+      }
+
+      const newTrafficKey = el('settings-traffic-key').value.trim();
+      const trafficWanted = el('settings-traffic-enable').checked;
+      if (newTrafficKey) localStorage.setItem(TT_KEY_STORAGE, newTrafficKey);
+      if (trafficWanted && !trafficOn) {
+        const key = getTomTomKey();
+        if (key) enableTraffic(key);
+      } else if (!trafficWanted && trafficOn) {
+        disableTraffic();
+      } else if (trafficWanted && trafficOn && newTrafficKey) {
+        // Key wurde geändert, während Verkehr schon aktiv war: neu starten
+        disableTraffic();
+        enableTraffic(newTrafficKey);
+      }
+
+      el('camera-settings-sheet').classList.remove('show');
+    } catch(e) {
+      alert('Kamera konnte nicht gewechselt werden: ' + e.message);
     }
+    el('camera-settings-apply').textContent = 'Übernehmen';
+  });
+  el('close-clips').addEventListener('click', () => el('clips-sheet').classList.remove('show'));
 
-    async function populateAvailableCameraDevices() {
-        const selectElement = document.getElementById('camera-select'); selectElement.innerHTML = '';
-        try {
-            await navigator.mediaDevices.getUserMedia({ video: true });
-            const elements = await navigator.mediaDevices.enumerateDevices();
-            let count = 1;
-            elements.forEach(dev => {
-                if (dev.kind === 'videoinput') {
-                    const opt = document.createElement('option'); opt.value = dev.deviceId;
-                    opt.text = dev.label || `Kamera ${count++}`; selectElement.appendChild(opt);
-                }
-            });
-        } catch (e) {
-            const opt = document.createElement('option'); opt.text = "Standard Kamera"; selectElement.appendChild(opt);
-        }
-    }
+  // Keep screen awake while page is open (best effort)
+  let wakeLock = null;
+  async function requestWakeLock(){
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') requestWakeLock();
+  });
 
-    async function initiateCameraPipeline() {
-        if (localStreamInstance) { localStreamInstance.getTracks().forEach(t => t.stop()); }
-        const selectedId = document.getElementById('camera-select').value;
-        const resProfile = document.getElementById('resolution-select').value;
-        let videoConstraints = { facingMode: "environment" };
-        if (selectedId) { videoConstraints = { deviceId: { exact: selectedId } }; }
-        if (resProfile === "1080") { videoConstraints.width = { ideal: 1920 }; videoConstraints.height = { ideal: 1080 }; }
-        else if (resProfile === "720") { videoConstraints.width = { ideal: 1280 }; videoConstraints.height = { ideal: 720 }; }
-        try {
-            localStreamInstance = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: document.getElementById('mic-enabled-check').checked });
-            document.getElementById('webcam-raw').srcObject = localStreamInstance;
-        } catch (err) { console.error(err); }
-    }
-
-    function restartCameraStream() { initiateCameraPipeline(); }
-
-    function initializeCanvasContext() {
-        const canvas = document.getElementById('dashcam-canvas'); canvasRenderContext = canvas.getContext('2d');
-        const rawVideo = document.getElementById('webcam-raw');
-        function renderOverlayLoop() {
-            if (rawVideo.readyState === rawVideo.HAVE_ENOUGH_DATA) {
-                if (canvas.width !== rawVideo.videoWidth || canvas.height !== rawVideo.videoHeight) {
-                    canvas.width = rawVideo.videoWidth; canvas.height = rawVideo.videoHeight;
-                }
-                canvasRenderContext.drawImage(rawVideo, 0, 0, canvas.width, canvas.height);
-                canvasRenderContext.fillStyle = "rgba(0, 0, 0, 0.5)"; canvasRenderContext.fillRect(15, canvas.height - 85, 420, 70);
-                canvasRenderContext.fillStyle = "#ffffff"; canvasRenderContext.font = "bold 16px 'Ubuntu', sans-serif";
-                const d = new Date(); canvasRenderContext.fillText(d.toLocaleDateString() + " " + d.toLocaleTimeString(), 25, canvas.height - 60);
-                canvasRenderContext.fillText(`GPS: ${geoCurrentLat.toFixed(5)}, ${geoCurrentLon.toFixed(5)} | ${currentMovingSpeedKmh} km/h`, 25, canvas.height - 30);
-            }
-            canvasAnimationId = requestAnimationFrame(renderOverlayLoop);
-        }
-        canvasAnimationId = requestAnimationFrame(renderOverlayLoop);
-    }
-
-    function toggleRecordingEngine() {
-        const statusPanel = document.getElementById('rec-status-group');
-        if (!isRecording) { startRecordingPipeline(); statusPanel.classList.add('rec-active'); isRecording = true; }
-        else { stopRecordingPipeline(); statusPanel.classList.remove('rec-active'); isRecording = false; }
-    }
-
-    function startRecordingPipeline() {
-        recordedChunksCollection = []; const canvasStream = document.getElementById('dashcam-canvas').captureStream(25);
-        if (document.getElementById('mic-enabled-check').checked && localStreamInstance && localStreamInstance.getAudioTracks().length > 0) {
-            canvasStream.addTrack(localStreamInstance.getAudioTracks()[0]);
-        }
-        let options = { mimeType: 'video/webm;codecs=vp8' };
-        if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264')) { options = { mimeType: 'video/mp4;codecs=h264' }; }
-        try { activeMediaRecorder = new MediaRecorder(canvasStream, options); } catch (e) { activeMediaRecorder = new MediaRecorder(canvasStream); }
-        activeMediaRecorder.ondataavailable = (event) => { if (event.data && event.data.size > 0) recordedChunksCollection.push(event.data); };
-        activeMediaRecorder.onstop = () => { packageCompletedClip(); };
-        activeMediaRecorder.start(); executeStopwatchCounter(true);
-        const loopIntervalMinutes = parseInt(document.getElementById('loop-select').value);
-        if (loopIntervalMinutes > 0) { loopWatchdogTimer = setInterval(() => { rotateLoopSegment(); }, loopIntervalMinutes * 60 * 1000); }
-    }
-
-    function stopRecordingPipeline() {
-        if (activeMediaRecorder && activeMediaRecorder.state !== "inactive") { activeMediaRecorder.stop(); }
-        executeStopwatchCounter(false); if (loopWatchdogTimer) { clearInterval(loopWatchdogTimer); loopWatchdogTimer = null; }
-    }
-
-    function rotateLoopSegment() { if (activeMediaRecorder && activeMediaRecorder.state === "recording") { activeMediaRecorder.stop(); activeMediaRecorder.start(); } }
-
-    function packageCompletedClip() {
-        if (recordedChunksCollection.length === 0) return;
-        const blob = new Blob(recordedChunksCollection, { type: activeMediaRecorder.mimeType || 'video/mp4' });
-        recordedChunksCollection = [];
-        const timestampStr = new Date().toISOString().replace(/T/, '_').replace(/\..+/, '').replace(/:/g, '-');
-        const filename = `Fahrspur_Clip_${timestampStr}.${blob.type.includes('webm') ? 'webm' : 'mp4'}`;
-        sessionClipsDatabase.push({ name: filename, blob: blob, size: (blob.size / (1024 * 1024)).toFixed(1) + " MB" });
-        const loopIntervalMinutes = parseInt(document.getElementById('loop-select').value);
-        if (loopIntervalMinutes > 0 && sessionClipsDatabase.length > 4) { sessionClipsDatabase.shift(); }
-        document.getElementById('clips-badge').innerText = sessionClipsDatabase.length;
-    }
-
-    function executeStopwatchCounter(run) {
-        if (run) {
-            recordingElapsedTimeSeconds = 0; document.getElementById('timer-display').innerText = "00:00";
-            recordingStopwatchInterval = setInterval(() => {
-                recordingElapsedTimeSeconds++;
-                const mins = String(Math.floor(recordingElapsedTimeSeconds / 60)).padStart(2, '0');
-                const secs = String(recordingElapsedTimeSeconds % 60).padStart(2, '0');
-                document.getElementById('timer-display').innerText = `${mins}:${secs}`;
-            }, 1000);
-        } else { clearInterval(recordingStopwatchInterval); document.getElementById('timer-display').innerText = "00:00"; }
-    }
-
-    async function executeRouteCalculation() {
-        const queryVal = document.getElementById('target-search').value.trim(); if (!queryVal) return;
-        const apiKey = localStorage.getItem('tomtom_api_key');
-        if (!apiKey) { alert("Bitte hinterlege deinen TomTom Key über Einstellungen (⚙️)."); openSettingsModal(); return; }
-        liveTrafficPolylines.forEach(p => mapObject.removeLayer(p)); liveTrafficPolylines = [];
-        const coordPattern = /^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?),\s*[-+]?(180(\.0+)?|((1[0-7]\d)|([1-9]?\d))(\.\d+)?)$/;
-        if (coordPattern.test(queryVal)) {
-            const parts = queryVal.split(','); fetchTomTomEngine(geoCurrentLat, geoCurrentLon, parseFloat(parts[0].trim()), parseFloat(parts[1].trim()), apiKey); return;
-        }
-        try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(queryVal)}&limit=1`);
-            const arrayRes = await res.json();
-            if (arrayRes.length > 0) { fetchTomTomEngine(geoCurrentLat, geoCurrentLon, parseFloat(arrayRes[0].lat), parseFloat(arrayRes[0].lon), apiKey); }
-            else { alert("Ort wurde nicht gefunden."); }
-        } catch (e) { alert("Fehler beim Geocoding."); }
-    }
-
-    async function fetchTomTomEngine(sLat, sLon, dLat, dLon, key) {
-        document.getElementById('summary-info-text').innerText = "Route wird berechnet...";
-        const pointsString = `${sLat},${sLon}:${dLat},${dLon}`;
-        const url = `https://api.tomtom.com/routing/1/calculateRoute/${pointsString}/json?key=${key}&traffic=true&sectionType=speedLimit&travelMode=car&instructionsType=coded`;
-        try {
-            const response = await fetch(url); const data = await response.json();
-            if (!data.routes || data.routes.length === 0) { alert("Keine Route gefunden."); return; }
-            const tr = data.routes[0]; const secondsTotal = tr.summary.travelTimeInSeconds;
-            const etaDateInstance = new Date(Date.now() + secondsTotal * 1000); const remainingMinutes = Math.round(secondsTotal / 60);
-            document.getElementById('search-panel').style.display = 'none'; document.getElementById('route-summary-box').style.display = 'block';
-            document.getElementById('summary-info-text').innerHTML = `<b>Ankunft: ${etaDateInstance.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</b> · noch ${remainingMinutes} Min.`;
-            const flatPointsArray = tr.legs[0].points.map(pt => [pt.latitude, pt.longitude]); window.aktuelleRoutenPunkte = flatPointsArray;
-            window.aktuelleRoutenSegmente = [];
-            if (tr.sections) {
-                tr.sections.forEach(s => {
-                    if (s.sectionType === "speedLimit") { window.aktuelleRoutenSegmente.push({ start: s.startPointIndex, end: s.endPointIndex, limitValue: s.speedLimit }); }
-                });
-            }
-            window.routenAnweisungen = tr.guidance ? tr.guidance.instructions : []; lastSpokenInstructionIndex = -1;
-            document.getElementById('traffic-legend').style.display = 'flex'; const congestionSegments = tr.sections.filter(s => s.sectionType === "traffic");
-            for (let i = 0; i < flatPointsArray.length - 1; i++) {
-                const nodeA = flatPointsArray[i]; const nodeB = flatPointsArray[i+1];
-                let flowColor = 'var(--accent-green)'; let trackWeight = 6;
-                const matchingCongestion = congestionSegments.find(c => i >= c.startPointIndex && i <= c.endPointIndex);
-                if (matchingCongestion) {
-                    const delaySeverity = matchingCongestion.magnitudeOfDelay;
-                    if (delaySeverity === 3 || delaySeverity === 4) { flowColor = 'var(--accent-red)'; trackWeight = 8; }
-                    else if (delaySeverity === 1 || delaySeverity === 2) { flowColor = 'var(--accent-orange)'; trackWeight = 7; }
-                }
-                const segmentLine = L.polyline([nodeA, nodeB], { color: flowColor, weight: trackWeight, opacity: 0.88, lineCap: 'round' }).addTo(mapObject);
-                liveTrafficPolylines.push(segmentLine);
-            }
-            activeNavigationMode = false; document.getElementById('start-nav-btn').innerText = "▶ Navigation starten";
-            document.getElementById('start-nav-btn').style.background = "var(--accent-green)";
-            const boundaryLine = L.polyline(flatPointsArray); mapObject.fitBounds(boundaryLine.getBounds(), { padding: [40, 40] });
-        } catch (err) { console.error(err); alert("Fehler beim Laden der TomTom Daten."); }
-    }
-
-    function processRealtimeSpeedLimitsMatching(uLat, uLon) {
-        if (!window.aktuelleRoutenPunkte || window.aktuelleRoutenSegmente.length === 0) return;
-        let minimalDistance = Infinity; let coreMatchIndex = 0;
-        window.aktuelleRoutenPunkte.forEach((pt, index) => {
-            const dy = pt[0] - uLat; const dx = pt[1] - uLon; const dist = dy*dy + dx*dx;
-            if (dist < minimalDistance) { minimalDistance = dist; coreMatchIndex = index; }
-        });
-        const segmentResult = window.aktuelleRoutenSegmente.find(s => coreMatchIndex >= s.start && coreMatchIndex <= s.end);
-        const trafficSignElement = document.getElementById('speed-limit-sign');
-        if (segmentResult && segmentResult.limitValue) { trafficSignElement.innerText = segmentResult.limitValue; trafficSignElement.style.display = 'flex'; }
-        else { trafficSignElement.style.display = 'none'; }
-        if (window.routenAnweisungen && window.routenAnweisungen.length > 0) {
-            const instructionMatch = window.routenAnweisungen.find(ins => coreMatchIndex >= ins.pointIndex - 3 && coreMatchIndex <= ins.pointIndex + 2);
-            if (instructionMatch) {
-                const matchedIdx = window.routenAnweisungen.indexOf(instructionMatch);
-                if (matchedIdx !== lastSpokenInstructionIndex) {
-                    lastSpokenInstructionIndex = matchedIdx; const msgText = instructionMatch.message;
-                    document.getElementById('turn-instruction-banner').innerText = msgText; document.getElementById('turn-instruction-banner').style.display = 'block';
-                    if (ttsVoiceEngine && !ttsVoiceEngine.speaking) {
-                        const speechUtterance = new SpeechSynthesisUtterance(msgText); speechUtterance.lang = 'de-DE'; ttsVoiceEngine.speak(speechUtterance);
-                    }
-                }
-            }
-        }
-    }
-
-    function triggerNavigationGuidance() {
-        const btn = document.getElementById('start-nav-btn');
-        if (!activeNavigationMode || btn.innerText === "▶ Zentrieren") {
-            activeNavigationMode = true; btn.innerText = "🎯 Zentrieren"; btn.style.background = "var(--panel-bg)";
-            mapObject.setView([geoCurrentLat, geoCurrentLon], 17);
-        } else { mapObject.setView([geoCurrentLat, geoCurrentLon], 17); }
-    }
-
-    function resetNavigationState() {
-        activeNavigationMode = false; document.getElementById('route-summary-box').style.display = 'none';
-        document.getElementById('turn-instruction-banner').style.display = 'none'; document.getElementById('search-panel').style.display = 'block';
-        liveTrafficPolylines.forEach(p => mapObject.removeLayer(p)); document.getElementById('traffic-legend').style.display = 'none';
-        document.getElementById('speed-limit-sign').style.display = 'none'; window.aktuelleRoutenPunkte = null; window.routenAnweisungen = [];
-    }
-
-    function handleSearchAutocomplete(inputVal) {
-        if (searchDebounceTimer) clearTimeout(searchDebounceTimer); const wrapper = document.getElementById('suggestions');
-        if (!inputVal || inputVal.trim().length < 3) { wrapper.style.display = 'none'; return; }
-        searchDebounceTimer = setTimeout(async () => {
-            try {
-                const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(inputVal)}&limit=5`);
-                const matches = await res.json();
-                if (matches && matches.length > 0) {
-                    wrapper.innerHTML = '';
-                    matches.forEach(m => {
-                        const item = document.createElement('div'); item.className = 'suggestion-item'; item.innerText = m.display_name;
-                        item.onclick = () => { document.getElementById('target-search').value = m.display_name; wrapper.style.display = 'none'; };
-                        wrapper.appendChild(item);
-                    });
-                    wrapper.style.display = 'block';
-                } else { wrapper.style.display = 'none'; }
-            } catch(e) { console.error(e); }
-        }, 400);
-    }
-
-    function swapViewports() { document.getElementById('app-container').classList.toggle('swap-views'); setTimeout(() => mapObject.invalidateSize(), 320); }
-    function toggleMapInset() { const frame = document.getElementById('map-container'); mapInsetStateVisible = !mapInsetStateVisible; frame.style.display = mapInsetStateVisible ? 'block' : 'none'; document.getElementById('toggle-inset-btn').innerText = mapInsetStateVisible ? '👁️' : '🕶️'; }
-    function openSettingsModal() { document.getElementById('settings-modal').style.display = 'flex'; }
-    function hideOverlayModal(id) { document.getElementById(id).style.display = 'none'; }
-    
-    function commitSettings() {
-        const key = document.getElementById('tomtom-key-input').value.trim(); localStorage.setItem('tomtom_api_key', key);
-        localStorage.setItem('mic_enabled_pref', document.getElementById('mic-enabled-check').checked);
-        localStorage.setItem('loop_duration_pref', document.getElementById('loop-select').value);
-        localStorage.setItem('resolution_pref', document.getElementById('resolution-select').value);
-        localStorage.setItem('camera_device_pref', document.getElementById('camera-select').value);
-        hideOverlayModal('settings-modal'); restartCameraStream();
-    }
-
-    function restoreStoredPreferences() {
-        const key = localStorage.getItem('tomtom_api_key'); if (key) document.getElementById('tomtom-key-input').value = key;
-        const mic = localStorage.getItem('mic_enabled_pref'); if (mic !== null) document.getElementById('mic-enabled-check').checked = (mic === 'true');
-        const loop = localStorage.getItem('loop_duration_pref'); if (loop !== null) document.getElementById('loop-select').value = loop;
-        const res = localStorage.getItem('resolution_pref'); if (res !== null) document.getElementById('resolution-select').value = res;
-    }
-
-    function openClipsModal() {
-        const listWrapper = document.getElementById('clips-list'); listWrapper.innerHTML = '';
-        if (sessionClipsDatabase.length === 0) { listWrapper.innerHTML = '<p style="color:var(--text-dim);font-size:13px;text-align:center;padding:10px;">Keine Aufnahmen vorhanden.</p>'; }
-        else {
-            sessionClipsDatabase.forEach((clip, index) => {
-                const item = document.createElement('div'); item.className = 'clip-item';
-                item.innerHTML = `<div class="clip-info"><span class="clip-name">${clip.name}</span><span class="clip-meta">Grösse: ${clip.size}</span></div><div class="clip-actions"><button class="clip-btn" style="background:var(--accent-blue);" onclick="downloadClipItem(${index})">💾</button></div>`;
-                listWrapper.appendChild(item);
-            });
-        }
-        document.getElementById('clips-modal').style.display = 'flex';
-    }
-
-    function downloadClipItem(idx) {
-        const targetClip = sessionClipsDatabase[idx]; if (!targetClip) return;
-        const dlUrl = URL.createObjectURL(targetClip.blob); const anchor = document.createElement('a');
-        anchor.href = dlUrl; anchor.download = targetClip.name; document.body.appendChild(anchor); anchor.click(); document.body.removeChild(anchor); URL.revokeObjectURL(dlUrl);
-    }
+})();
 </script>
 </body>
 </html>
