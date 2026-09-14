@@ -67,6 +67,16 @@
   #speed-chip{text-align:right;}
   #speed-val{font-size:17px; font-weight:700; color:var(--text);}
   #speed-unit{font-size:10px; color:var(--text-dim); margin-left:3px;}
+  #speed-limit-sign{
+    display:none; width:34px; height:34px; border-radius:50%;
+    border:3.5px solid #d32f2f; background:#fff; color:#000;
+    font-weight:700; font-size:14px; font-family:'Ubuntu', sans-serif;
+    align-items:center; justify-content:center;
+    box-shadow:0 2px 6px rgba(0,0,0,.4);
+    animation:popIn .2s ease-out;
+  }
+  #speed-limit-sign.show{display:flex;}
+  @keyframes popIn{ 0%{transform:scale(0);} 100%{transform:scale(1);} }
 
   .hud-icon-btn{
     position:relative;
@@ -357,6 +367,7 @@
     <button class="hud-icon-btn" id="settings-btn" title="Einstellungen">⚙</button>
     <button id="rec-btn-top" title="Aufnahme"><div class="core"></div></button>
     <div id="speed-chip"><span id="speed-val" class="mono">--</span><span id="speed-unit">km/h</span></div>
+    <div id="speed-limit-sign"></div>
   </div>
 </div>
 
@@ -475,7 +486,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.1.1';
+  const APP_VERSION = '2.2.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -557,6 +568,55 @@
   const NAV_ZOOM = 17; // "Straße voraus"-Zoomstufe während aktiver Navigation
   let isNavigating = false;
 
+  // ---------- Tempolimit (OSM/Overpass) ----------
+  let lastLimitFetchPos = null, lastLimitFetchTime = 0;
+  const LIMIT_MIN_GAP_MS = 15000;
+  const LIMIT_MIN_MOVE_M = 80;
+
+  // Länder-typische implizite Limits, falls die Straße kein explizites Tempolimit-Tag trägt
+  const IMPLICIT_LIMITS = {
+    'CH:urban': 50, 'CH:rural': 80, 'CH:motorway': 120, 'CH:trunk': 100,
+    'DE:urban': 50, 'DE:rural': 100, 'DE:motorway': null,
+    'AT:urban': 50, 'AT:rural': 100, 'AT:motorway': 130,
+    'FR:urban': 50, 'FR:rural': 80, 'FR:motorway': 130,
+    'IT:urban': 50, 'IT:rural': 90, 'IT:motorway': 130
+  };
+
+  function parseMaxspeed(raw){
+    if (!raw) return null;
+    const num = parseInt(raw, 10);
+    if (!isNaN(num) && /^\d+/.test(raw.trim())) return num;
+    if (IMPLICIT_LIMITS.hasOwnProperty(raw)) return IMPLICIT_LIMITS[raw];
+    return null;
+  }
+
+  async function fetchSpeedLimit(lat, lon){
+    const now = Date.now();
+    if (now - lastLimitFetchTime < LIMIT_MIN_GAP_MS) return;
+    if (lastLimitFetchPos) {
+      const moved = distMeters(lastLimitFetchPos, { lat, lon });
+      if (moved < LIMIT_MIN_MOVE_M) return;
+    }
+    lastLimitFetchTime = now;
+    lastLimitFetchPos = { lat, lon };
+
+    const query = `[out:json][timeout:8];way(around:35,${lat},${lon})[highway][maxspeed];out tags 3;`;
+    try {
+      const res = await fetch('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query));
+      if (!res.ok) return;
+      const data = await res.json();
+      const way = data.elements && data.elements[0];
+      const limit = way ? parseMaxspeed(way.tags.maxspeed) : null;
+      const sign = el('speed-limit-sign');
+      if (limit) {
+        sign.textContent = limit;
+        sign.classList.add('show');
+      } else {
+        sign.classList.remove('show');
+      }
+    } catch(e) { /* offline oder Overpass nicht erreichbar — still bleiben */ }
+  }
+
   function onPosition(p){
     const { latitude, longitude, speed, accuracy } = p.coords;
     lastPos = { lat: latitude, lon: longitude };
@@ -565,6 +625,7 @@
       currentSpeedKmh = Math.max(0, speed * 3.6);
     }
     el('speed-val').textContent = currentSpeedKmh !== null ? Math.round(currentSpeedKmh) : '--';
+    fetchSpeedLimit(latitude, longitude);
 
     if (map && meMarker) {
       meMarker.setLatLng([latitude, longitude]);
