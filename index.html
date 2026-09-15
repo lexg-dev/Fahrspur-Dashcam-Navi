@@ -123,6 +123,12 @@
     white-space:pre-wrap; word-break:break-word; line-height:1.5; margin:8px 0 0;
   }
   #debug-gps.cs-hidden{display:none;}
+  #debug-sim-btn{
+    width:100%; margin-top:8px; background:var(--accent-blue); color:#fff; border:none;
+    border-radius:8px; padding:10px; font-family:inherit; font-size:13px; font-weight:700;
+  }
+  #debug-sim-btn.active{background:var(--danger);}
+  #debug-sim-btn.cs-hidden{display:none;}
   .cs-toggle-row{
     display:flex; align-items:center; justify-content:space-between;
     margin-top:10px; font-size:13px; color:var(--text);
@@ -433,6 +439,7 @@
       <input type="checkbox" id="settings-debug-enable" />
     </label>
     <pre id="debug-gps" class="cs-hidden">wird geladen…</pre>
+    <button id="debug-sim-btn" class="cs-hidden">▶ Route simulieren</button>
 
     <label class="cs-toggle-row">
       <span>Karte in Fahrtrichtung drehen (Beta)</span>
@@ -523,7 +530,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.8.0';
+  const APP_VERSION = '2.9.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -712,7 +719,64 @@
       lines.push('  code=' + gpsDebug.lastErr.code + '  ' + gpsDebug.lastErr.message);
     }
     el2.textContent = lines.join('\n');
+    updateSimButtonState();
   }
+
+  // ---------- Debug: Routensimulation ----------
+  let simulationActive = false, simulationTimer = null, simulationIndex = 0;
+  const SIM_SPEED_MS = 11.1; // ~40 km/h, simulierte Geschwindigkeit
+
+  function bearingDeg(a, b){
+    const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+    const dLon = toRad(b.lon - a.lon);
+    const y = Math.sin(dLon) * Math.cos(toRad(b.lat));
+    const x = Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
+              Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(dLon);
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  function updateSimButtonState(){
+    const btn = document.getElementById('debug-sim-btn');
+    if (!btn) return;
+    if (!debugEnabled || !routeCoordsFlat || routeCoordsFlat.length < 2) {
+      btn.classList.add('cs-hidden');
+      return;
+    }
+    btn.classList.remove('cs-hidden');
+    btn.classList.toggle('active', simulationActive);
+    btn.textContent = simulationActive ? '■ Simulation stoppen' : '▶ Route simulieren';
+  }
+
+  function startSimulation(){
+    if (!routeCoordsFlat || routeCoordsFlat.length < 2) return;
+    simulationActive = true;
+    simulationIndex = 0;
+    updateSimButtonState();
+    simulationTimer = setInterval(() => {
+      if (simulationIndex >= routeCoordsFlat.length - 1) { stopSimulation(); return; }
+      const cur = routeCoordsFlat[simulationIndex];
+      const next = routeCoordsFlat[simulationIndex + 1];
+      const heading = bearingDeg(cur, next);
+      onPosition({
+        __simulated: true,
+        coords: { latitude: next.lat, longitude: next.lon, speed: SIM_SPEED_MS, heading, accuracy: 5 }
+      });
+      simulationIndex++;
+    }, 400);
+  }
+
+  function stopSimulation(){
+    simulationActive = false;
+    clearInterval(simulationTimer);
+    applyMapRotation(0);
+    updateSimButtonState();
+  }
+
+  document.addEventListener('click', e => {
+    if (e.target && e.target.id === 'debug-sim-btn') {
+      simulationActive ? stopSimulation() : startSimulation();
+    }
+  });
 
   if (navigator.permissions && navigator.permissions.query) {
     navigator.permissions.query({ name: 'geolocation' }).then(status => {
@@ -725,6 +789,7 @@
   }
 
   function onPosition(p){
+    if (simulationActive && !p.__simulated) return; // während Simulation keine echten Updates dazwischenfunken lassen
     const { latitude, longitude, speed, accuracy } = p.coords;
     lastPos = { lat: latitude, lon: longitude };
 
@@ -995,6 +1060,7 @@
     showStep(0);
     routeCoordsFlat = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
     offRouteStreak = 0;
+    updateSimButtonState();
 
     el('route-summary').classList.add('show');
     el('eta-val').textContent = new Date(Date.now() + route.duration * 1000)
@@ -1190,6 +1256,7 @@
     currentDestination = null;
     routeCoordsFlat = null;
     offRouteStreak = 0;
+    stopSimulation();
     applyMapRotation(0);
     el('route-summary').classList.remove('show');
     el('route-start').classList.remove('show');
@@ -1481,7 +1548,7 @@
     debugEnabled = el('settings-debug-enable').checked;
     localStorage.setItem('fahrspur_debug_enabled', debugEnabled ? '1' : '0');
     el('debug-gps').classList.toggle('cs-hidden', !debugEnabled);
-    if (debugEnabled) { renderGpsDebug(); } else { clearInterval(gpsDebugTimer); }
+    if (debugEnabled) { renderGpsDebug(); } else { clearInterval(gpsDebugTimer); stopSimulation(); updateSimButtonState(); }
 
     rotateEnabled = el('settings-rotate-enable').checked;
     localStorage.setItem('fahrspur_rotate_enabled', rotateEnabled ? '1' : '0');
