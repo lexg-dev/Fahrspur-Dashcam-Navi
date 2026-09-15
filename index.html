@@ -117,6 +117,11 @@
   #app-version-tag{font-size:11px; font-weight:400; color:var(--text-dim); font-family:'Ubuntu', sans-serif;}
   .cs-label{display:block; font-size:13px; color:#aaa; margin:15px 0 6px;}
   .cs-hint{font-size:11px; color:var(--text-dim); line-height:1.4; margin:8px 0 0;}
+  #debug-gps{
+    background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.15); border-radius:8px;
+    padding:10px 12px; font-family:monospace; font-size:11px; color:#9fd;
+    white-space:pre-wrap; word-break:break-word; line-height:1.5; margin:0;
+  }
   .cs-toggle-row{
     display:flex; align-items:center; justify-content:space-between;
     margin-top:10px; font-size:13px; color:var(--text);
@@ -414,6 +419,9 @@
     </label>
     <p class="cs-hint">Kostenlosen Key auf developer.tomtom.com anlegen. Wird nur lokal in diesem Browser gespeichert.</p>
 
+    <label class="cs-label">Debug: Standort/GPS</label>
+    <pre id="debug-gps">wird geladen…</pre>
+
     <div id="camera-settings-actions">
       <button id="camera-settings-cancel">Abbrechen</button>
       <button id="camera-settings-apply">Übernehmen</button>
@@ -495,7 +503,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.5.2';
+  const APP_VERSION = '2.6.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -552,6 +560,8 @@
     // Nutzerinteraktion und zeigt den Freigabe-Dialog manchmal gar nicht erst an
     if (navigator.geolocation) {
       setSpeedDisplay('GPS?', false);
+      gpsDebug.watchRegisteredAt = new Date().toLocaleTimeString('de-CH');
+      renderGpsDebug();
       navigator.geolocation.watchPosition(onPosition, onPosError, {
         enableHighAccuracy:true, maximumAge:1000, timeout:8000
       });
@@ -580,6 +590,7 @@
   const NAV_ZOOM = 17; // "Straße voraus"-Zoomstufe während aktiver Navigation
   let isNavigating = false;
   let hasGpsFix = false;
+  let gpsDebugTimer = null;
 
   // ---------- Tempolimit (OSM/Overpass) ----------
   let lastLimitFetchPos = null, lastLimitFetchTime = 0;
@@ -635,15 +646,58 @@
     el('speed-unit').style.display = isNumeric ? '' : 'none';
   }
 
-  let gpsSuccessShown = false;
+  // ---------- Debug: Standort/GPS ----------
+  const gpsDebug = {
+    geoApiPresent: (typeof navigator.geolocation !== 'undefined'),
+    permissionState: 'unbekannt',
+    watchRegisteredAt: null,
+    posCount: 0,
+    errCount: 0,
+    lastPos: null,
+    lastErr: null
+  };
+
+  function renderGpsDebug(){
+    const el2 = document.getElementById('debug-gps');
+    if (!el2) return;
+    const lines = [
+      'Geolocation-API vorhanden: ' + (gpsDebug.geoApiPresent ? 'ja' : 'nein'),
+      'Berechtigungsstatus: ' + gpsDebug.permissionState,
+      'watchPosition angemeldet: ' + (gpsDebug.watchRegisteredAt || 'noch nicht'),
+      'Erfolgreiche Fixes: ' + gpsDebug.posCount,
+      'Fehler-Callbacks: ' + gpsDebug.errCount
+    ];
+    if (gpsDebug.lastPos) {
+      lines.push('Letzter Fix (' + gpsDebug.lastPos.time + '):');
+      lines.push('  lat=' + gpsDebug.lastPos.lat + '  lon=' + gpsDebug.lastPos.lon);
+      lines.push('  accuracy=' + gpsDebug.lastPos.accuracy + 'm  speed=' + gpsDebug.lastPos.speed);
+    }
+    if (gpsDebug.lastErr) {
+      lines.push('Letzter Fehler (' + gpsDebug.lastErr.time + '):');
+      lines.push('  code=' + gpsDebug.lastErr.code + '  ' + gpsDebug.lastErr.message);
+    }
+    el2.textContent = lines.join('\n');
+  }
+
+  if (navigator.permissions && navigator.permissions.query) {
+    navigator.permissions.query({ name: 'geolocation' }).then(status => {
+      gpsDebug.permissionState = status.state;
+      renderGpsDebug();
+      status.onchange = () => { gpsDebug.permissionState = status.state; renderGpsDebug(); };
+    }).catch(() => { gpsDebug.permissionState = 'nicht abfragbar'; renderGpsDebug(); });
+  } else {
+    gpsDebug.permissionState = 'Permissions-API nicht unterstützt';
+  }
+
   function onPosition(p){
     const { latitude, longitude, speed, accuracy } = p.coords;
     lastPos = { lat: latitude, lon: longitude };
     lastGpsAccuracy = (typeof accuracy === 'number') ? accuracy : null;
-    if (!gpsSuccessShown) {
-      gpsSuccessShown = true;
-      alert('GPS-Fix erhalten:\nlat=' + latitude + '\nlon=' + longitude + '\naccuracy=' + accuracy + 'm\nspeed=' + speed);
-    }
+
+    gpsDebug.posCount++;
+    gpsDebug.lastPos = { lat: latitude, lon: longitude, accuracy, speed, time: new Date().toLocaleTimeString('de-CH') };
+    renderGpsDebug();
+
     if (typeof speed === 'number' && speed !== null && !isNaN(speed)) {
       currentSpeedKmh = Math.max(0, speed * 3.6);
     }
@@ -665,18 +719,18 @@
       }
       checkRouteProgress();
     } catch(e) {
-      alert('Fehler NACH dem GPS-Fix (Anzeige/Karte):\n' + e.message);
+      gpsDebug.lastErr = { code: 'JS-Fehler', message: e.message, time: new Date().toLocaleTimeString('de-CH') };
+      renderGpsDebug();
     }
   }
-  let gpsErrorShown = false;
   function onPosError(err){
     setSpeedDisplay(hasGpsFix ? '--' : 'GPS?', false);
-    if (!gpsErrorShown && err) {
-      gpsErrorShown = true;
-      const codes = { 1: 'Zugriff verweigert (PERMISSION_DENIED)', 2: 'Standort nicht ermittelbar (POSITION_UNAVAILABLE)', 3: 'Zeitüberschreitung (TIMEOUT)' };
-      const reason = codes[err.code] || ('Code ' + err.code);
-      alert('GPS-Fehler: ' + reason + (err.message ? '\n' + err.message : ''));
+    gpsDebug.errCount++;
+    if (err) {
+      const codes = { 1: 'PERMISSION_DENIED', 2: 'POSITION_UNAVAILABLE', 3: 'TIMEOUT' };
+      gpsDebug.lastErr = { code: codes[err.code] || err.code, message: err.message || '', time: new Date().toLocaleTimeString('de-CH') };
     }
+    renderGpsDebug();
   }
 
   // ---------- Map ----------
@@ -1206,9 +1260,15 @@
     el('settings-traffic-key').value = getTomTomKey();
     el('settings-traffic-enable').checked = trafficOn;
     el('settings-mic-enable').checked = micEnabled;
+    renderGpsDebug();
+    if (gpsDebugTimer) clearInterval(gpsDebugTimer);
+    gpsDebugTimer = setInterval(renderGpsDebug, 1000);
     el('camera-settings-sheet').classList.add('show');
   });
-  el('camera-settings-cancel').addEventListener('click', () => el('camera-settings-sheet').classList.remove('show'));
+  el('camera-settings-cancel').addEventListener('click', () => {
+    el('camera-settings-sheet').classList.remove('show');
+    clearInterval(gpsDebugTimer);
+  });
 
   async function populateCameraSelect(){
     const select = el('camera-select');
@@ -1301,6 +1361,7 @@
       }
 
       el('camera-settings-sheet').classList.remove('show');
+      clearInterval(gpsDebugTimer);
     } catch(e) {
       alert('Kamera konnte nicht gewechselt werden: ' + e.message);
     }
