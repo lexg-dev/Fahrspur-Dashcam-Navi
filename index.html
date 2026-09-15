@@ -203,6 +203,13 @@
   #turn-icon{font-size:17px; width:20px; text-align:center; flex-shrink:0;}
   #turn-text{font-size:12.5px; font-weight:700; line-height:1.2;}
   #turn-dist{font-size:10px; color:var(--text-dim); margin-top:1px;}
+  #lane-guidance{display:none; gap:3px; margin-top:4px;}
+  #lane-guidance.show{display:flex;}
+  .lane-icon{
+    width:16px; height:16px; display:flex; align-items:center; justify-content:center;
+    font-size:11px; border-radius:3px; background:rgba(255,255,255,.12); color:var(--text-dim);
+  }
+  .lane-icon.valid{background:var(--accent-blue); color:#fff;}
 
   /* Map inset */
   #map-wrap{
@@ -445,6 +452,7 @@
   <div>
     <div id="turn-text">Route berechnen...</div>
     <div id="turn-dist"></div>
+    <div id="lane-guidance"></div>
   </div>
 </div>
 
@@ -496,6 +504,7 @@
   let stream = null, micStream = null, mediaRecorder = null, recordedChunks = [];
   let recording = false, recStartTime = 0, timerInterval = null;
   let map, meMarker, routeLine, routeSteps = [], nextStepIndex = 0;
+  let labeledTiles, nolabelTiles;
   let lastPos = null, currentSpeedKmh = null, micEnabled = true;
   let clipCounter = 0;
   let currentDeviceId = null;
@@ -514,7 +523,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.7.0';
+  const APP_VERSION = '2.8.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -748,6 +757,7 @@
         }
       }
       checkRouteProgress();
+      checkForReroute();
     } catch(e) {
       gpsDebug.lastErr = { code: 'JS-Fehler', message: e.message, time: new Date().toLocaleTimeString('de-CH') };
       renderGpsDebug();
@@ -772,11 +782,26 @@
     mapEl.style.transform = deg ? `rotate(${-deg}deg)` : '';
     const controls = mapEl.querySelector('.leaflet-control-container');
     if (controls) controls.style.transform = deg ? `rotate(${deg}deg)` : '';
+
+    // Während echter Drehung auf beschriftungsfreien Kartenstil wechseln,
+    // damit Strassennamen nicht schräg/auf dem Kopf stehen
+    if (map && labeledTiles && nolabelTiles) {
+      const wantNolabel = deg !== 0;
+      const haveNolabel = map.hasLayer(nolabelTiles);
+      if (wantNolabel && !haveNolabel) {
+        map.addLayer(nolabelTiles);
+        map.removeLayer(labeledTiles);
+      } else if (!wantNolabel && haveNolabel) {
+        map.addLayer(labeledTiles);
+        map.removeLayer(nolabelTiles);
+      }
+    }
   }
 
   function initMap(){
     map = L.map('map', { zoomControl:false, attributionControl:false }).setView([47.3769, 8.5417], 14);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
+    labeledTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
+    nolabelTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png', { maxZoom:19 });
     L.control.zoom({ position: 'topright' }).addTo(map);
     meMarker = L.circleMarker([47.3769, 8.5417], {
       radius:7, color:'#2196f3', fillColor:'#2196f3', fillOpacity:0, opacity:0, weight:2
@@ -949,6 +974,35 @@
     return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
   }
 
+  let currentDestination = null; // fürs automatische Neu-Routen gemerkt
+  let routeCoordsFlat = null;    // [[lat,lon], ...] fürs Abweichungs-Prüfen
+  let offRouteStreak = 0;
+  let lastRerouteCheck = 0;
+  const REROUTE_DISTANCE_M = 60;
+  const REROUTE_MIN_GAP_MS = 12000;
+
+  async function computeRoute(startCoord, destCoord, opts){
+    opts = opts || {};
+    const url = `https://router.project-osrm.org/route/v1/driving/${startCoord.lon},${startCoord.lat};${destCoord.lon},${destCoord.lat}?overview=full&geometries=geojson&steps=true`;
+    const routeRes = await fetch(url);
+    const routeData = await routeRes.json();
+    if (!routeData.routes || !routeData.routes.length) return false;
+
+    const route = routeData.routes[0];
+    drawRoute(route, !opts.silent);
+    routeSteps = route.legs[0].steps;
+    nextStepIndex = 0;
+    showStep(0);
+    routeCoordsFlat = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
+    offRouteStreak = 0;
+
+    el('route-summary').classList.add('show');
+    el('eta-val').textContent = new Date(Date.now() + route.duration * 1000)
+      .toLocaleTimeString('de-CH', { hour:'2-digit', minute:'2-digit' });
+    el('dist-val').textContent = (route.distance / 1000).toFixed(1) + ' km';
+    return true;
+  }
+
   async function planRoute(){
     const q = el('dest-input').value.trim();
     const startQ = el('start-input').value.trim();
@@ -968,21 +1022,10 @@
         start = resolvedStart;
       }
 
-      const url = `https://router.project-osrm.org/route/v1/driving/${start.lon},${start.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson&steps=true`;
-      const routeRes = await fetch(url);
-      const routeData = await routeRes.json();
-      if (!routeData.routes || !routeData.routes.length) { el('turn-text').textContent = 'Keine Route gefunden.'; return; }
+      const ok = await computeRoute(start, dest);
+      if (!ok) { el('turn-text').textContent = 'Keine Route gefunden.'; return; }
+      currentDestination = dest;
 
-      const route = routeData.routes[0];
-      drawRoute(route);
-      routeSteps = route.legs[0].steps;
-      nextStepIndex = 0;
-      showStep(0);
-
-      el('route-summary').classList.add('show');
-      el('eta-val').textContent = new Date(Date.now() + route.duration * 1000)
-        .toLocaleTimeString('de-CH', { hour:'2-digit', minute:'2-digit' });
-      el('dist-val').textContent = (route.distance / 1000).toFixed(1) + ' km';
       map.__userMoved = false;
       isNavigating = false;
       el('route-start').classList.add('show');
@@ -995,11 +1038,50 @@
     }
   }
 
-  function drawRoute(route){
+  async function checkForReroute(){
+    if (!isNavigating || !lastPos || !routeCoordsFlat || !currentDestination) return;
+    const now = Date.now();
+    if (now - lastRerouteCheck < REROUTE_MIN_GAP_MS) return;
+    lastRerouteCheck = now;
+
+    let minDist = Infinity;
+    for (let i = 0; i < routeCoordsFlat.length - 1; i++) {
+      const d = distToSegmentMeters(lastPos, routeCoordsFlat[i], routeCoordsFlat[i + 1]);
+      if (d < minDist) minDist = d;
+    }
+
+    if (minDist > REROUTE_DISTANCE_M) {
+      offRouteStreak++;
+      if (offRouteStreak >= 2) {
+        offRouteStreak = 0;
+        el('turn-text').textContent = 'Verfahren — Route wird neu berechnet…';
+        el('turn-banner').classList.add('show');
+        speak('Route wird neu berechnet');
+        const ok = await computeRoute(lastPos, currentDestination, { silent: true });
+        if (!ok) el('turn-text').textContent = 'Neuberechnung fehlgeschlagen.';
+      }
+    } else {
+      offRouteStreak = 0;
+    }
+  }
+
+  // Abstand eines Punkts zu einer Strecke (a–b), in Metern
+  function distToSegmentMeters(p, a, b){
+    const toXY = pt => ({ x: pt.lon * Math.cos(p.lat * Math.PI / 180), y: pt.lat });
+    const P = toXY(p), A = toXY(a), B = toXY(b);
+    const dx = B.x - A.x, dy = B.y - A.y;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 === 0 ? 0 : ((P.x - A.x) * dx + (P.y - A.y) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const closest = { lat: A.y + t * dy, lon: (A.x + t * dx) / Math.cos(p.lat * Math.PI / 180) };
+    return distMeters(p, closest);
+  }
+
+  function drawRoute(route, fitView){
     if (routeLine) map.removeLayer(routeLine);
     const latlngs = route.geometry.coordinates.map(c => [c[1], c[0]]);
     routeLine = L.polyline(latlngs, { color:'#2196f3', weight:5, opacity:.85 }).addTo(map);
-    map.fitBounds(routeLine.getBounds(), { padding:[20,20] });
+    if (fitView !== false) map.fitBounds(routeLine.getBounds(), { padding:[20,20] });
   }
 
   function maneuverIcon(type, modifier){
@@ -1012,12 +1094,33 @@
     return '↑';
   }
 
+  const LANE_ICONS = {
+    straight: '↑', left: '↰', right: '↱',
+    slight_left: '↖', slight_right: '↗',
+    sharp_left: '↺', sharp_right: '↻', uturn: '↶'
+  };
+
+  function renderLaneGuidance(step){
+    const box = el('lane-guidance');
+    const intersections = step && step.intersections;
+    const withLanes = intersections && intersections.filter(x => x.lanes && x.lanes.length);
+    const lanes = withLanes && withLanes.length ? withLanes[withLanes.length - 1].lanes : null;
+    if (!lanes) { box.classList.remove('show'); box.innerHTML = ''; return; }
+    box.innerHTML = lanes.map(lane => {
+      const ind = (lane.indications && lane.indications[0]) || 'straight';
+      const icon = LANE_ICONS[ind] || '↑';
+      return `<span class="lane-icon${lane.valid ? ' valid' : ''}">${icon}</span>`;
+    }).join('');
+    box.classList.add('show');
+  }
+
   function showStep(i){
     const step = routeSteps[i];
     if (!step) return;
     el('turn-icon').textContent = maneuverIcon(step.maneuver.type, step.maneuver.modifier);
     el('turn-text').textContent = step.name ? `${verbFor(step.maneuver)} auf ${step.name}` : verbFor(step.maneuver);
     el('turn-dist').textContent = Math.round(step.distance) + ' m';
+    renderLaneGuidance(step);
     el('turn-banner').classList.add('show');
   }
 
@@ -1084,10 +1187,14 @@
     if (routeLine) map.removeLayer(routeLine);
     routeSteps = []; nextStepIndex = 0;
     isNavigating = false;
+    currentDestination = null;
+    routeCoordsFlat = null;
+    offRouteStreak = 0;
     applyMapRotation(0);
     el('route-summary').classList.remove('show');
     el('route-start').classList.remove('show');
     el('turn-banner').classList.remove('show');
+    el('lane-guidance').classList.remove('show');
     el('dest-input').value = '';
     el('start-input').value = '';
     el('search-fields').classList.remove('hidden');
