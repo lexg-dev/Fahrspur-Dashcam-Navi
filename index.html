@@ -503,7 +503,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.6.0';
+  const APP_VERSION = '2.6.1';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -553,15 +553,28 @@
   }
 
   // ---------- Permission gate ----------
+  function getCurrentPositionPromise(options){
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, options);
+    });
+  }
+
   el('grant-access').addEventListener('click', async () => {
     el('permission-error').textContent = '';
-    // Standort-Anfrage sofort und direkt beim Klick auslösen (nicht erst nach
-    // Kamera/Mikro warten) — sonst zählt Safari das nicht mehr als
-    // Nutzerinteraktion und zeigt den Freigabe-Dialog manchmal gar nicht erst an
+    // Standort-Dialog vollständig abwarten, BEVOR die Kamera-Anfrage startet —
+    // gleichzeitige/überlappende Berechtigungsdialoge lässt iOS teils
+    // stillschweigend fallen, ohne den Standort-Dialog je aufzulösen
     if (navigator.geolocation) {
       setSpeedDisplay('GPS?', false);
       gpsDebug.watchRegisteredAt = new Date().toLocaleTimeString('de-CH');
       renderGpsDebug();
+      try {
+        const firstFix = await getCurrentPositionPromise({ enableHighAccuracy:true, timeout:10000, maximumAge:0 });
+        onPosition(firstFix);
+      } catch(err) {
+        onPosError(err);
+      }
+      // Danach laufend weitere Updates empfangen
       navigator.geolocation.watchPosition(onPosition, onPosError, {
         enableHighAccuracy:true, maximumAge:1000, timeout:8000
       });
