@@ -120,8 +120,9 @@
   #debug-gps{
     background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.15); border-radius:8px;
     padding:10px 12px; font-family:monospace; font-size:11px; color:#9fd;
-    white-space:pre-wrap; word-break:break-word; line-height:1.5; margin:0;
+    white-space:pre-wrap; word-break:break-word; line-height:1.5; margin:8px 0 0;
   }
+  #debug-gps.cs-hidden{display:none;}
   .cs-toggle-row{
     display:flex; align-items:center; justify-content:space-between;
     margin-top:10px; font-size:13px; color:var(--text);
@@ -215,7 +216,8 @@
     width:calc(100% - 28px); height:52%;
     right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
   }
-  #map{width:100%; height:100%; background:#1e1e1e;}
+  #map{width:100%; height:100%; background:#1e1e1e; transform-origin:50% 50%; transition:transform .3s linear;}
+  .leaflet-control-container{transform-origin:50% 50%; transition:transform .3s linear;}
   #map-toggle{
     position:absolute; top:6px; right:6px; z-index:30;
     width:26px; height:26px; border-radius:8px;
@@ -419,8 +421,17 @@
     </label>
     <p class="cs-hint">Kostenlosen Key auf developer.tomtom.com anlegen. Wird nur lokal in diesem Browser gespeichert.</p>
 
-    <label class="cs-label">Debug: Standort/GPS</label>
-    <pre id="debug-gps">wird geladen…</pre>
+    <label class="cs-toggle-row">
+      <span>Debug-Bereich anzeigen (Standort/GPS)</span>
+      <input type="checkbox" id="settings-debug-enable" />
+    </label>
+    <pre id="debug-gps" class="cs-hidden">wird geladen…</pre>
+
+    <label class="cs-toggle-row">
+      <span>Karte in Fahrtrichtung drehen (Beta)</span>
+      <input type="checkbox" id="settings-rotate-enable" />
+    </label>
+    <p class="cs-hint">Dreht die Karte während der aktiven Navigation, sodass "vorne" immer oben ist — dafür stehen Straßennamen dann teils schräg/auf dem Kopf. Nur während echter Fahrt sinnvoll nutzbar (Kompassdaten nötig).</p>
 
     <div id="camera-settings-actions">
       <button id="camera-settings-cancel">Abbrechen</button>
@@ -503,7 +514,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.6.2';
+  const APP_VERSION = '2.7.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -604,6 +615,8 @@
   let isNavigating = false;
   let hasGpsFix = false;
   let gpsDebugTimer = null;
+  let debugEnabled = (localStorage.getItem('fahrspur_debug_enabled') === '1');
+  let rotateEnabled = (localStorage.getItem('fahrspur_rotate_enabled') === '1');
 
   // ---------- Tempolimit (OSM/Overpass) ----------
   let lastLimitFetchPos = null, lastLimitFetchTime = 0;
@@ -728,6 +741,11 @@
           const targetZoom = isNavigating ? Math.max(map.getZoom(), NAV_ZOOM) : map.getZoom();
           map.setView([latitude, longitude], targetZoom);
         }
+        if (rotateEnabled && isNavigating && !map.__userMoved && typeof p.coords.heading === 'number' && !isNaN(p.coords.heading)) {
+          applyMapRotation(p.coords.heading);
+        } else {
+          applyMapRotation(0);
+        }
       }
       checkRouteProgress();
     } catch(e) {
@@ -746,6 +764,16 @@
   }
 
   // ---------- Map ----------
+  // ---------- Kartendrehung in Fahrtrichtung (Beta) ----------
+  function applyMapRotation(headingDeg){
+    const mapEl = document.getElementById('map');
+    if (!mapEl) return;
+    const deg = (typeof headingDeg === 'number' && !isNaN(headingDeg)) ? headingDeg : 0;
+    mapEl.style.transform = deg ? `rotate(${-deg}deg)` : '';
+    const controls = mapEl.querySelector('.leaflet-control-container');
+    if (controls) controls.style.transform = deg ? `rotate(${deg}deg)` : '';
+  }
+
   function initMap(){
     map = L.map('map', { zoomControl:false, attributionControl:false }).setView([47.3769, 8.5417], 14);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
@@ -755,6 +783,7 @@
     }).addTo(map);
     map.on('dragstart', () => {
       map.__userMoved = true;
+      applyMapRotation(0);
       if (isNavigating) {
         el('route-start').classList.remove('following');
         el('route-start').textContent = '◎';
@@ -1055,6 +1084,7 @@
     if (routeLine) map.removeLayer(routeLine);
     routeSteps = []; nextStepIndex = 0;
     isNavigating = false;
+    applyMapRotation(0);
     el('route-summary').classList.remove('show');
     el('route-start').classList.remove('show');
     el('turn-banner').classList.remove('show');
@@ -1272,9 +1302,14 @@
     el('settings-traffic-key').value = getTomTomKey();
     el('settings-traffic-enable').checked = trafficOn;
     el('settings-mic-enable').checked = micEnabled;
-    renderGpsDebug();
-    if (gpsDebugTimer) clearInterval(gpsDebugTimer);
-    gpsDebugTimer = setInterval(renderGpsDebug, 1000);
+    el('settings-debug-enable').checked = debugEnabled;
+    el('debug-gps').classList.toggle('cs-hidden', !debugEnabled);
+    el('settings-rotate-enable').checked = rotateEnabled;
+    if (debugEnabled) {
+      renderGpsDebug();
+      if (gpsDebugTimer) clearInterval(gpsDebugTimer);
+      gpsDebugTimer = setInterval(renderGpsDebug, 1000);
+    }
     el('camera-settings-sheet').classList.add('show');
   });
   el('camera-settings-cancel').addEventListener('click', () => {
@@ -1335,6 +1370,15 @@
     const format = formats[parseInt(formatSelect.value, 10)] || formats[0];
     const newLoopMinutes = parseInt(loopSelect.value, 10) || 0;
     micEnabled = el('settings-mic-enable').checked;
+
+    debugEnabled = el('settings-debug-enable').checked;
+    localStorage.setItem('fahrspur_debug_enabled', debugEnabled ? '1' : '0');
+    el('debug-gps').classList.toggle('cs-hidden', !debugEnabled);
+    if (debugEnabled) { renderGpsDebug(); } else { clearInterval(gpsDebugTimer); }
+
+    rotateEnabled = el('settings-rotate-enable').checked;
+    localStorage.setItem('fahrspur_rotate_enabled', rotateEnabled ? '1' : '0');
+    if (!rotateEnabled) applyMapRotation(0);
 
     el('camera-settings-apply').textContent = 'Wird angewendet...';
     try {
