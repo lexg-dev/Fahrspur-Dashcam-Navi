@@ -495,7 +495,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.5.0';
+  const APP_VERSION = '2.5.1';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -659,8 +659,15 @@
     }
     checkRouteProgress();
   }
-  function onPosError(){
+  let gpsErrorShown = false;
+  function onPosError(err){
     setSpeedDisplay(hasGpsFix ? '--' : 'GPS?', false);
+    if (!gpsErrorShown && err) {
+      gpsErrorShown = true;
+      const codes = { 1: 'Zugriff verweigert (PERMISSION_DENIED)', 2: 'Standort nicht ermittelbar (POSITION_UNAVAILABLE)', 3: 'Zeitüberschreitung (TIMEOUT)' };
+      const reason = codes[err.code] || ('Code ' + err.code);
+      alert('GPS-Fehler: ' + reason + (err.message ? '\n' + err.message : ''));
+    }
   }
 
   // ---------- Map ----------
