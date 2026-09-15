@@ -495,7 +495,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.4.0';
+  const APP_VERSION = '2.4.1';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -558,6 +558,7 @@
       selectedFormat = supportedFormats[0];
 
       if (navigator.geolocation) {
+        setSpeedDisplay('GPS?', false);
         navigator.geolocation.watchPosition(onPosition, onPosError, {
           enableHighAccuracy:true, maximumAge:1000, timeout:8000
         });
@@ -576,6 +577,7 @@
   // ---------- Geolocation ----------
   const NAV_ZOOM = 17; // "Straße voraus"-Zoomstufe während aktiver Navigation
   let isNavigating = false;
+  let hasGpsFix = false;
 
   // ---------- Tempolimit (OSM/Overpass) ----------
   let lastLimitFetchPos = null, lastLimitFetchTime = 0;
@@ -626,6 +628,11 @@
     } catch(e) { /* offline oder Overpass nicht erreichbar — still bleiben */ }
   }
 
+  function setSpeedDisplay(text, isNumeric){
+    el('speed-val').textContent = text;
+    el('speed-unit').style.display = isNumeric ? '' : 'none';
+  }
+
   function onPosition(p){
     const { latitude, longitude, speed, accuracy } = p.coords;
     lastPos = { lat: latitude, lon: longitude };
@@ -633,11 +640,16 @@
     if (typeof speed === 'number' && speed !== null && !isNaN(speed)) {
       currentSpeedKmh = Math.max(0, speed * 3.6);
     }
-    el('speed-val').textContent = currentSpeedKmh !== null ? Math.round(currentSpeedKmh) : '--';
+    setSpeedDisplay(currentSpeedKmh !== null ? Math.round(currentSpeedKmh) : '--', currentSpeedKmh !== null);
     fetchSpeedLimit(latitude, longitude);
 
     if (map && meMarker) {
       meMarker.setLatLng([latitude, longitude]);
+      if (!hasGpsFix) {
+        hasGpsFix = true;
+        meMarker.setStyle({ opacity: 1, fillOpacity: 1 });
+        map.setView([latitude, longitude], NAV_ZOOM); // beim ersten Fix direkt auf echte Position springen
+      }
       if (!map.__userMoved) {
         const targetZoom = isNavigating ? Math.max(map.getZoom(), NAV_ZOOM) : map.getZoom();
         map.setView([latitude, longitude], targetZoom);
@@ -645,7 +657,9 @@
     }
     checkRouteProgress();
   }
-  function onPosError(){ el('speed-val').textContent = '--'; }
+  function onPosError(){
+    setSpeedDisplay(hasGpsFix ? '--' : 'GPS?', false);
+  }
 
   // ---------- Map ----------
   function initMap(){
@@ -653,7 +667,7 @@
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
     L.control.zoom({ position: 'topright' }).addTo(map);
     meMarker = L.circleMarker([47.3769, 8.5417], {
-      radius:7, color:'#2196f3', fillColor:'#2196f3', fillOpacity:1, weight:2
+      radius:7, color:'#2196f3', fillColor:'#2196f3', fillOpacity:0, opacity:0, weight:2
     }).addTo(map);
     map.on('dragstart', () => {
       map.__userMoved = true;
