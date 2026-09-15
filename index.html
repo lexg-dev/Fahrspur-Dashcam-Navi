@@ -503,7 +503,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '2.6.1';
+  const APP_VERSION = '2.6.2';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -705,7 +705,6 @@
   function onPosition(p){
     const { latitude, longitude, speed, accuracy } = p.coords;
     lastPos = { lat: latitude, lon: longitude };
-    lastGpsAccuracy = (typeof accuracy === 'number') ? accuracy : null;
 
     gpsDebug.posCount++;
     gpsDebug.lastPos = { lat: latitude, lon: longitude, accuracy, speed, time: new Date().toLocaleTimeString('de-CH') };
