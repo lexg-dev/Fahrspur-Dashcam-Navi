@@ -1,0 +1,2849 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Fahrspur — Dashcam & Navi</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.12.0/maplibre-gl.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --asphalt:#121212;
+    --panel:rgba(25,25,25,.85);
+    --panel-solid:#1e1e1e;
+    --panel-2:#1e1e1e;
+    --line:rgba(255,255,255,.08);
+    --accent-blue:#2196f3;
+    --accent-blue-dim:#1976d2;
+    --accent-green:#2e7d32;
+    --accent-green-dim:#1b5e20;
+    --accent-orange:#ff9800;
+    --amber:var(--accent-blue);
+    --amber-dim:var(--accent-blue-dim);
+    --teal:var(--accent-blue);
+    --text:#ffffff;
+    --text-dim:#a8a8a8;
+    --danger:#e50914;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%; margin:0; overflow:hidden; overscroll-behavior:none;}
+  body{
+    background:var(--asphalt);
+    color:var(--text);
+    font-family:'Ubuntu', system-ui, sans-serif;
+    position:fixed; inset:0;
+  }
+  .mono{font-family:'Ubuntu', system-ui, sans-serif; font-weight:700;}
+
+  #stage{position:fixed; inset:0; background:#000; transition:filter .6s ease;}
+  /* Tunnel-Dunkelmodus (3.8.0): dimmt Kamera-Ansicht UND Kartenausschnitt gleichermassen — greift
+     unabhängig davon, welche der beiden gerade die grosse Ansicht ist (swap-view). Reine
+     Compositor-Filter (keine Neuzeichnung), daher praktisch kostenlos zusätzlich zur bestehenden
+     GPU-Last. */
+  body.tunnel-mode #stage, body.tunnel-mode #map-wrap{filter:brightness(.45) saturate(.6);}
+  /* KEIN visibility:hidden hier: pausiert auf manchen iOS-Versionen die Video-Frame-Aktualisierung
+     selbst, nicht nur das Compositing (Regression siehe CHANGELOG 3.8.1). */
+  #camera{width:100%; height:100%; object-fit:cover; display:block;}
+  #overlayCanvas{position:fixed; inset:0; width:100%; height:100%; pointer-events:none;}
+
+  /* Top HUD */
+  #hud-top{
+    position:fixed; top:0; left:0; right:0;
+    padding:calc(env(safe-area-inset-top) + 8px) 24px 6px;
+    display:grid; grid-template-columns:1fr auto 1fr; align-items:start; gap:8px;
+    background:linear-gradient(to bottom, rgba(0,0,0,0), transparent);
+    z-index:30; pointer-events:none;
+  }
+  #hud-top-right{
+    display:flex; align-items:center; gap:12px; pointer-events:auto;
+    background:var(--panel); /* kein backdrop-filter: liegt dauerhaft über der Karte, Live-Weichzeichnen von WebGL ist auf iOS teuer */
+    padding:6px 12px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.05);
+    box-shadow:0 4px 15px rgba(0,0,0,.4);
+    justify-self:end; grid-column:3;
+  }
+  #hud-top-right:not(.expanded) #swap-btn,
+  #hud-top-right:not(.expanded) #inset-toggle-btn,
+  #hud-top-right:not(.expanded) #inset-pos-btn,
+  #hud-top-right:not(.expanded) #rotate-toggle-btn,
+  #hud-top-right:not(.expanded) #settings-btn{display:none;}
+  #hud-top-middle{
+    display:flex; align-items:center; gap:6px; pointer-events:auto;
+    justify-self:center; grid-column:2; padding:4px 10px; border-radius:999px;
+    transition:background .2s ease, padding .2s ease, box-shadow .2s ease;
+  }
+  #hud-top-middle.expanded{
+    gap:12px; padding:6px 12px;
+    background:var(--panel); /* backdrop-filter entfernt, s. #hud-top-right — dauerhaft über der Karte/Kamera sichtbar während der Aufnahme */
+    border:1px solid rgba(255,255,255,.05);
+    box-shadow:0 4px 15px rgba(0,0,0,.4);
+  }
+  #hud-top-middle #clips-btn, #hud-top-middle #rec-btn-top{display:none;}
+  #hud-top-middle.expanded #clips-btn, #hud-top-middle.expanded #rec-btn-top{display:flex;}
+  .rec-chip{display:flex; align-items:center; gap:8px; cursor:pointer;}
+  .rec-dot{width:11px; height:11px; border-radius:50%; background:#555;}
+  .rec-dot.live{background:var(--danger); box-shadow:0 0 0 0 rgba(229,9,20,.6); animation:pulse 1s infinite;}
+  @keyframes pulse{
+    0%, 100%{opacity:1;}
+    50%{opacity:.4;}
+  }
+  #timer{font-size:14px; letter-spacing:.02em; color:var(--text); font-weight:700;}
+  #speed-chip{text-align:right; cursor:pointer;}
+  #speed-val{font-size:17px; font-weight:700; color:var(--text);}
+  #speed-unit{font-size:10px; color:var(--text-dim); margin-left:3px;}
+  #speed-limit-sign{
+    display:none; width:34px; height:34px; border-radius:50%;
+    border:3.5px solid #d32f2f; background:#fff; color:#000;
+    font-weight:700; font-size:14px; font-family:'Ubuntu', sans-serif;
+    align-items:center; justify-content:center;
+    box-shadow:0 2px 6px rgba(0,0,0,.4);
+    animation:popIn .2s ease-out;
+  }
+  #speed-limit-sign.show{display:flex;}
+  @keyframes popIn{ 0%{transform:scale(0);} 100%{transform:scale(1);} }
+
+  /* Debug-HUD: eigenes, unabhängiges Overlay statt Anzeige im Einstellungs-Sheet —
+     Checkbox in den Einstellungen schaltet nur noch dieses Overlay ein/aus */
+  #debug-hud{
+    position:fixed; left:8px; top:calc(env(safe-area-inset-top) + 90px); z-index:25;
+    max-width:min(78vw, 340px); max-height:50vh; overflow-y:auto; pointer-events:none;
+    background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.15); border-radius:8px;
+    padding:8px 10px; font-family:monospace; font-size:10.5px; color:#9fd;
+    white-space:pre-wrap; word-break:break-word; line-height:1.4;
+  }
+  #debug-hud.cs-hidden{display:none;}
+
+  .hud-icon-btn{
+    position:relative;
+    width:auto; height:auto; border-radius:8px;
+    background:none; backdrop-filter:none;
+    border:none; color:var(--text); font-size:17px;
+    display:flex; align-items:center; justify-content:center;
+    padding:4px; transition:background .15s ease;
+  }
+  /* WICHTIG: Emoji-Icons (🧭, 🗖, …) sind farbige Glyphen — die CSS-Eigenschaft "color" hat auf sie
+     keine sichtbare Wirkung. Der "on"-Zustand war dadurch praktisch unsichtbar. Statt/zusätzlich zur
+     Textfarbe daher ein deutlicher Hintergrund-Pill, der unabhängig vom Icon selbst funktioniert. */
+  .hud-icon-btn.on{color:var(--accent-blue); background:rgba(33,150,243,.28);}
+  #clips-count-badge{
+    position:absolute; top:-6px; right:-8px; min-width:15px; height:15px; padding:0 3px;
+    border-radius:999px; background:var(--accent-blue); color:#fff;
+    font-size:9px; font-weight:700; line-height:15px; text-align:center;
+    font-family:'Ubuntu', sans-serif; display:none;
+  }
+  #clips-count-badge.show{display:block;}
+
+  #rec-btn-top{
+    width:34px; height:34px; border-radius:50%;
+    background:var(--danger); border:2px solid #fff;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+    box-shadow:0 2px 6px rgba(0,0,0,.3);
+  }
+  #rec-btn-top .core{width:13px; height:13px; border-radius:3px; background:#fff; opacity:0;}
+  #rec-btn-top.recording{background:#fff; border-color:var(--danger); border-radius:8px; width:28px; height:28px;}
+
+  #camera-settings-sheet{
+    position:fixed; inset:0; z-index:60; display:none;
+    background:rgba(6,7,9,.7); backdrop-filter:blur(4px);
+    align-items:center; justify-content:center; padding:24px;
+  }
+  #camera-settings-sheet.show{display:flex;}
+  #camera-settings-panel{
+    background:var(--panel-solid); border:1px solid #333; border-radius:16px;
+    padding:20px; width:100%; max-width:380px; max-height:80vh; overflow-y:auto;
+  }
+  #camera-settings-panel h2{font-size:20px; margin:0 0 14px; display:flex; align-items:baseline; gap:8px;}
+  #app-version-tag{font-size:11px; font-weight:400; color:var(--text-dim); font-family:'Ubuntu', sans-serif;}
+  /* 4.3.0: Abstände etwas gestrafft (15/6 → 11/4, 10 → 7px bei den Toggle-Zeilen) — kompakteres
+     Einstellungsmenü, auf Wunsch. Keine funktionale Änderung. */
+  .cs-label{display:block; font-size:13px; color:#aaa; margin:11px 0 4px;}
+  .cs-hint{font-size:11px; color:var(--text-dim); line-height:1.35; margin:6px 0 0;}
+  .cs-row2{display:grid; grid-template-columns:1fr 1fr; gap:0 10px;}
+  #debug-sim-btn{
+    width:100%; margin-top:8px; background:var(--accent-blue); color:#fff; border:none;
+    border-radius:8px; padding:10px; font-family:inherit; font-size:13px; font-weight:700;
+  }
+  #debug-sim-btn.active{background:var(--danger);}
+  #debug-sim-btn.cs-hidden{display:none;}
+  .cs-toggle-row{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-top:7px; font-size:13px; color:var(--text);
+  }
+  .cs-toggle-row input[type="checkbox"]{width:20px; height:20px; accent-color:var(--accent-blue);}
+  #settings-traffic-key{
+    width:100%; background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.15); border-radius:8px;
+    padding:11px 14px; color:var(--text); font-family:inherit; font-size:14px;
+  }
+  #camera-settings-panel select{
+    width:100%; background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.15); border-radius:8px;
+    padding:11px 14px; color:var(--text); font-family:inherit; font-size:14px;
+  }
+  #camera-settings-actions{display:flex; justify-content:flex-end; gap:10px; margin-top:18px;}
+  #camera-settings-actions button{
+    font-family:inherit; font-size:14px; font-weight:700; border-radius:8px; padding:11px 16px; border:none;
+    background:#444; color:var(--text);
+  }
+  #camera-settings-apply{background:var(--accent-green);}
+
+  /* Swapped view: map fills the screen, camera becomes the small inset */
+  body.swap-view #stage{
+    position:fixed; z-index:25;
+    width:132px; height:132px; right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+    border-radius:12px; overflow:hidden; border:2px solid rgba(255,255,255,.2);
+    box-shadow:0 8px 24px rgba(0,0,0,.5); background:#000;
+    transition:all .25s ease;
+  }
+  body.swap-view #overlayCanvas{
+    position:fixed; z-index:26;
+    width:132px; height:132px; right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+    border-radius:12px; overflow:hidden;
+    transition:all .25s ease;
+  }
+  body.swap-view #map-wrap{
+    position:fixed; inset:0; width:100%; height:100%;
+    right:auto; bottom:auto; border-radius:0; z-index:1;
+  }
+  body.swap-view #map-toggle{display:none;}
+  .inset-hidden{display:none !important;}
+
+  /* Zoom-Steuerung der Karte: nur sinnvoll, wenn die Karte im Vollbild ist —
+     in der kleinen Kartenansicht ausblenden, sonst unter die Geschwindigkeitsanzeige setzen */
+  .maplibregl-ctrl-top-right{display:none !important;}
+  body.swap-view .maplibregl-ctrl-top-right{display:block !important;
+    top:calc(env(safe-area-inset-top) + 66px) !important;
+  }
+  /* Attributions-Hinweis (Pflicht bei OpenFreeMap/OSM) dezent ins HUD einpassen */
+  .maplibregl-ctrl-bottom-left{font-size:10px;}
+  .maplibregl-ctrl-attrib{background:rgba(0,0,0,.45) !important; color:var(--text-dim) !important;}
+  .maplibregl-ctrl-attrib a{color:var(--text-dim) !important;}
+  .maplibregl-ctrl-attrib-button{filter:invert(1); opacity:.6;}
+
+  /* Start-/Ziel-Suche nur sinnvoll, wenn die Karte im Vollbild ist */
+  body:not(.swap-view) #search-fields{display:none;}
+
+  /* Vier wählbare Ecken für das kleine Inset-Fenster (Karte im Normalmodus, Kamera im Swap-Modus) */
+  #map-wrap.pos-bl, body.swap-view #stage.pos-bl, body.swap-view #overlayCanvas.pos-bl{
+    left:14px; right:auto;
+  }
+  #map-wrap.pos-tr, body.swap-view #stage.pos-tr, body.swap-view #overlayCanvas.pos-tr{
+    top:calc(env(safe-area-inset-top) + 140px); bottom:auto; z-index:32;
+  }
+  #map-wrap.pos-tl, body.swap-view #stage.pos-tl, body.swap-view #overlayCanvas.pos-tl{
+    left:14px; right:auto; top:calc(env(safe-area-inset-top) + 140px); bottom:auto; z-index:32;
+  }
+  body.swap-view #overlayCanvas.pos-tr, body.swap-view #overlayCanvas.pos-tl{ z-index:33; }
+
+  /* Turn banner — jetzt linke Spalte der Titelleiste, deutlich größer */
+  #turn-banner{
+    justify-self:start; grid-column:1; pointer-events:auto;
+    z-index:22; display:none; max-width:100%;
+    background:var(--panel); /* backdrop-filter entfernt, s. #hud-top-right — genau während aktiver Navigation sichtbar */
+    border-left:5px solid var(--accent-blue);
+    border-radius:16px; padding:10px 16px 10px 12px;
+    align-items:center; gap:12px;
+    box-shadow:0 4px 15px rgba(0,0,0,.4);
+    cursor:pointer; /* 3.9.10 — antippbar zum Starten/Stoppen der Simulation, siehe Klick-Handler */
+  }
+  #turn-banner.show{display:flex;}
+  #turn-icon{font-size:30px; width:36px; text-align:center; flex-shrink:0;}
+  #turn-main-row{display:flex; align-items:center; gap:7px; flex-wrap:wrap;}
+  #turn-text{font-size:17px; font-weight:700; line-height:1.25;}
+  /* Strassennummer-Badge (Autobahn/Landstrasse), aus OSRM-Step.ref — nur sichtbar wenn vorhanden */
+  #turn-ref{
+    display:none; font-size:13px; font-weight:700; line-height:1;
+    padding:4px 7px; border-radius:5px; background:#3a6fb0; color:#fff;
+    box-shadow:0 0 0 1px rgba(255,255,255,.25) inset;
+  }
+  #turn-ref.show{display:inline-block;}
+  /* Autobahn-Referenzen (A1, A2, …) grün wie auf CH/DE-Signalisation statt generisch blau */
+  #turn-ref.motorway{background:#0a7d34;}
+  #turn-dist{font-size:14px; color:var(--text-dim); margin-top:2px; font-weight:500;}
+  #turn-destinations{display:none; font-size:13px; color:var(--text-dim); margin-top:3px; line-height:1.3;}
+  #turn-destinations.show{display:block;}
+  #lane-guidance{display:none; gap:5px; margin-top:6px;}
+  #lane-guidance.show{display:flex;}
+  .lane-icon{
+    width:26px; height:26px; display:flex; align-items:center; justify-content:center;
+    font-size:17px; border-radius:5px; background:rgba(255,255,255,.12); color:var(--text-dim);
+  }
+  .lane-icon.valid{background:var(--accent-blue); color:#fff;}
+
+  /* Map inset */
+  #map-wrap{
+    position:fixed; z-index:25;
+    width:132px; height:132px; right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+    border-radius:12px; overflow:hidden; border:2px solid rgba(255,255,255,.2);
+    box-shadow:0 8px 24px rgba(0,0,0,.5);
+    transition:all .25s ease, filter .6s ease; /* filter separat/länger für den Tunnel-Dunkelmodus (3.8.0) */
+  }
+  #map-wrap.expanded{
+    width:calc(100% - 28px); height:52%;
+    right:14px; bottom:calc(env(safe-area-inset-bottom) + 132px);
+  }
+  #map{width:100%; height:100%; background:#1e1e1e;}
+  /* OpenFreeMap/MapLibre-Attributionshinweis (das "i") von der Standard-Ecke unten links in die
+     untere Mitte verschoben, aber weiterhin ganz am Rand (bottom:0, wie von MapLibre vorgegeben) —
+     nur der Container wird auf volle Breite gebracht und sein Inhalt zentriert, die eigentliche
+     (i)-Box selbst bleibt unverändert klein (compact:true). */
+  #map .maplibregl-ctrl-bottom-left{left:0; right:0; width:100%; display:flex; justify-content:center;}
+  #map canvas, #map .maplibregl-canvas-container{touch-action:none;}
+  #map-toggle{
+    position:absolute; top:6px; right:6px; z-index:30;
+    width:26px; height:26px; border-radius:8px;
+    background:rgba(0,0,0,.6); border:none;
+    color:var(--text); font-size:13px; display:flex; align-items:center; justify-content:center;
+  }
+
+  .incident-popup{font-family:'Ubuntu', sans-serif; font-size:13px; color:#1a1200;}
+  .incident-popup .sev{font-weight:700; display:block; margin-bottom:2px;}
+  .incident-marker{
+    width:12px; height:12px; border-radius:50%;
+    background:#ff9800; border:1px solid #ff9800; opacity:.9;
+    box-shadow:0 0 0 1px rgba(255,255,255,.6);
+  }
+
+  .me-marker-icon{background:none; border:none; position:relative;}
+  .me-marker-fan{
+    position:absolute; left:50%; top:50%; width:64px; height:64px;
+    margin-left:-32px; margin-top:-32px; border-radius:50%;
+    /* 60°-Kegel zentriert auf "oben" (0°=Norden) — Basiszustand vor der JS-Rotation */
+    background:conic-gradient(from -30deg, rgba(33,150,243,.4) 0deg, rgba(33,150,243,.4) 60deg, rgba(33,150,243,0) 60deg);
+    pointer-events:none; display:none; z-index:-1; transition:transform .25s linear;
+  }
+  .me-marker-fan.show{display:block;}
+  .me-marker-dot{
+    width:14px; height:14px; border-radius:50%;
+    background:#2196f3; border:2px solid #fff;
+    box-shadow:0 0 0 3px rgba(33,150,243,.35);
+  }
+  .me-marker-car{
+    width:32px; height:32px; display:none; align-items:center; justify-content:center;
+    transform-origin:50% 50%; transition:transform .2s linear;
+    filter:drop-shadow(0 2px 4px rgba(0,0,0,.6));
+  }
+  /* Symmetrischer SVG-Pfeil statt Auto-Emoji: ein Emoji zeigt bei jeder Rotation seitlich statt in
+     Fahrtrichtung (siehe CHANGELOG 3.7.1). 0° = geradeaus nach oben. */
+  .me-marker-car svg{width:100%; height:100%; overflow:visible;}
+  .me-marker-icon.as-car .me-marker-dot{display:none;}
+  .me-marker-icon.as-car .me-marker-car{display:flex;}
+
+  /* Bottom controls */
+  #hud-bottom{
+    position:fixed; left:0; right:0; bottom:0; z-index:20;
+    padding:10px 16px calc(env(safe-area-inset-bottom) + 14px);
+    background:linear-gradient(to top, rgba(0,0,0,0), transparent);
+    pointer-events:none; /* wie #hud-top: Wrapper durchlässig, nur die interaktiven Kinder unten wieder aktiv machen */
+  }
+  #search-fields{
+    display:block; pointer-events:auto;
+    max-width:420px; margin-left:0; margin-right:auto;
+    background:var(--panel); /* kein backdrop-filter, s. #hud-top-right */
+    padding:15px; border-radius:16px;
+    border:1px solid rgba(255,255,255,.05);
+  }
+  #search-fields.hidden{display:none;}
+  #start-dest-group{display:flex; flex-direction:row; align-items:stretch; gap:8px; margin-bottom:10px;}
+  #start-dest-stack{flex:1; display:flex; flex-direction:column; gap:6px; min-width:0;}
+  #start-row, #dest-row{position:relative; min-width:0;}
+  #start-input, #dest-input{
+    width:100%; background:rgba(0,0,0,.4);
+    border:1px solid rgba(255,255,255,.15); border-radius:8px;
+    padding:11px 14px; color:var(--text); font-family:inherit; font-size:14px;
+  }
+  #start-input::placeholder, #dest-input::placeholder{color:var(--text-dim);}
+  #swap-start-dest{
+    flex-shrink:0; align-self:center; width:34px; height:34px; border-radius:50%;
+    background:rgba(255,255,255,.08); border:none; color:var(--text); font-size:14px;
+  }
+
+  .suggest-list{
+    display:none; position:absolute; left:0; right:0; bottom:calc(100% + 6px);
+    background:var(--panel-solid);
+    border:1px solid #333; border-radius:8px; overflow:hidden;
+    max-height:140px; overflow-y:auto; z-index:99;
+    box-shadow:0 -4px 15px rgba(0,0,0,.5);
+  }
+  .suggest-list.show{display:block;}
+  .suggest-item{
+    padding:10px 14px; font-size:13px; color:var(--text);
+    border-bottom:1px solid #2a2a2a;
+  }
+  .suggest-item:last-child{border-bottom:none;}
+  .suggest-item:active{background:#2a2a2a;}
+  #dest-go{
+    width:100%; background:var(--accent-blue); border:none; border-radius:8px;
+    color:#fff; padding:11px; font-family:inherit; font-size:14px; font-weight:700;
+  }
+  #route-summary{
+    display:none; flex-direction:column; gap:4px; pointer-events:auto;
+    max-width:290px; margin-left:0; margin-right:auto;
+    background:var(--panel); /* backdrop-filter entfernt, s. #hud-top-right — während aktiver Route dauerhaft über der Karte */
+    padding:6px 10px; border-radius:10px;
+    border:1px solid rgba(255,255,255,.05);
+  }
+  #route-summary.show{display:flex;}
+  #route-info-row{
+    display:flex; justify-content:flex-start; align-items:center; gap:14px;
+    font-size:14px; color:var(--text-dim); padding:0 2px; line-height:1.3;
+  }
+  #route-summary .val{color:var(--text); font-weight:700;}
+  #route-summary-actions{display:flex; gap:4px;}
+  #route-clear{
+    color:#fff; font-family:inherit; background:var(--danger); border:none;
+    width:30px; height:30px; border-radius:8px; font-size:14px; font-weight:700;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+    box-shadow:0 2px 6px rgba(229,9,20,.4);
+  }
+  #route-start{
+    display:none;
+    position:fixed; z-index:21;
+    right:14px; bottom:calc(env(safe-area-inset-bottom) + 14px);
+    width:46px; height:46px; border-radius:50%;
+    background:var(--accent-green); color:#fff; border:none;
+    font-size:16px; font-weight:700;
+    align-items:center; justify-content:center;
+    box-shadow:0 4px 15px rgba(0,0,0,.4);
+  }
+  #route-start.show{display:flex;}
+  #route-start.following{background:#444; color:var(--accent-blue); border:2px solid var(--accent-blue);}
+
+  /* Clips drawer */
+  #clips-sheet{
+    position:fixed; inset:0; z-index:40; display:none;
+    background:rgba(0,0,0,.85);
+  }
+  #clips-sheet.show{display:block;}
+  #clips-panel{
+    position:absolute; left:0; right:0; bottom:0;
+    max-height:72%; overflow-y:auto;
+    background:var(--panel-solid); border-radius:16px 16px 0 0;
+    padding:20px calc(16px) calc(env(safe-area-inset-bottom) + 20px);
+    border-top:1px solid #333;
+  }
+  #clips-panel h2{font-size:20px; margin:0 0 4px;}
+  #clips-panel .hint{font-size:12px; color:var(--text-dim); margin:0 0 16px;}
+  .clip-row{
+    display:flex; align-items:center; gap:12px;
+    padding:10px 0; border-top:1px solid #2a2a2a;
+  }
+  .clip-row:first-of-type{border-top:none;}
+  .clip-meta{flex:1;}
+  .clip-name{font-size:14px;}
+  .clip-time{font-size:12px; color:var(--text-dim);}
+  .clip-dl{
+    background:var(--accent-blue); border:none; border-radius:8px;
+    color:#fff; padding:9px 16px; font-family:inherit; font-size:13px; font-weight:700;
+  }
+  #close-clips{
+    position:absolute; top:16px; right:16px;
+    width:30px; height:30px; border-radius:50%;
+    background:#333; border:none; color:var(--text);
+  }
+
+  #permission-gate{
+    position:fixed; inset:0; z-index:100; background:var(--asphalt);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:32px; text-align:center; gap:18px;
+  }
+  #permission-gate h1{font-size:24px; margin:0; font-weight:700;}
+  #permission-gate p{font-size:14px; color:var(--text-dim); line-height:1.5; max-width:320px; margin:0;}
+  #permission-gate button{
+    background:var(--accent-blue); color:#fff; border:none; border-radius:8px;
+    padding:14px 28px; font-family:inherit; font-size:15px; font-weight:700;
+  }
+  #permission-error{color:var(--danger); font-size:13px; max-width:320px;}
+</style>
+</head>
+<body>
+
+<div id="permission-gate">
+  <h1>Fahrspur</h1>
+  <p>Dashcam-Aufnahme und Navigation in einer Ansicht. Für Kamera, Mikrofon und Standort brauche ich kurz deine Freigabe.</p>
+  <button id="grant-access">Zugriff erlauben & starten</button>
+  <p id="permission-error"></p>
+</div>
+
+<div id="stage">
+  <video id="camera" autoplay muted playsinline></video>
+  <canvas id="overlayCanvas"></canvas>
+</div>
+
+<div id="hud-top">
+  <div id="turn-banner">
+    <div id="turn-icon">↑</div>
+    <div>
+      <div id="turn-main-row">
+        <span id="turn-text">Route berechnen...</span>
+        <span id="turn-ref"></span>
+      </div>
+      <div id="turn-dist"></div>
+      <div id="turn-destinations"></div>
+      <div id="lane-guidance"></div>
+    </div>
+  </div>
+  <div id="hud-top-middle">
+    <div class="rec-chip">
+      <div class="rec-dot" id="recDot"></div>
+      <span id="timer" class="mono">00:00</span>
+    </div>
+    <button class="hud-icon-btn" id="clips-btn" title="Aufnahmen">🎞️<span id="clips-count-badge"></span></button>
+    <button id="rec-btn-top" title="Aufnahme"><div class="core"></div></button>
+  </div>
+  <div id="hud-top-right" class="expanded">
+    <button class="hud-icon-btn" id="swap-btn" title="Ansicht tauschen">⇄</button>
+    <button class="hud-icon-btn" id="inset-toggle-btn" title="Kleines Fenster ein-/ausblenden">🗖</button>
+    <button class="hud-icon-btn" id="inset-pos-btn" title="Position wechseln">⇲</button>
+    <button class="hud-icon-btn" id="rotate-toggle-btn" title="Karte in Fahrtrichtung drehen">🧭</button>
+    <button class="hud-icon-btn" id="settings-btn" title="Einstellungen">⚙</button>
+    <div id="speed-chip"><span id="speed-val" class="mono">--</span><span id="speed-unit">km/h</span></div>
+    <div id="speed-limit-sign"></div>
+  </div>
+</div>
+
+<pre id="debug-hud" class="cs-hidden"></pre>
+
+<div id="camera-settings-sheet">
+  <div id="camera-settings-panel">
+    <h2>Einstellungen <span id="app-version-tag"></span></h2>
+    <label class="cs-toggle-row">
+      <span>Mikrofon bei Aufnahme</span>
+      <input type="checkbox" id="settings-mic-enable" checked />
+    </label>
+    <label class="cs-label">Kamera</label>
+    <select id="camera-select"></select>
+    <!-- 4.3.0: Auflösung + Format nebeneinander statt je eigene Zeile — kompakteres Einstellungsmenü,
+         auf Wunsch (keine funktionale Änderung, nur Anordnung). -->
+    <div class="cs-row2">
+      <div>
+        <label class="cs-label">Auflösung</label>
+        <select id="resolution-select">
+          <option value="720p">HD — 1280×720</option>
+          <option value="1080p" selected>Full HD — 1920×1080</option>
+          <option value="max">Maximal verfügbar</option>
+        </select>
+      </div>
+      <div>
+        <label class="cs-label">Format</label>
+        <select id="format-select"></select>
+      </div>
+    </div>
+    <label class="cs-label">Loop-Aufnahme</label>
+    <select id="loop-select">
+      <option value="0">Aus — durchgehend aufnehmen</option>
+      <option value="5">Letzte 5 Minuten</option>
+      <option value="10">Letzte 10 Minuten</option>
+      <option value="15">Letzte 15 Minuten</option>
+      <option value="30">Letzte 30 Minuten</option>
+    </select>
+    <p class="cs-hint">Die Gesamtdauer wird in 3 gleich lange Clips aufgeteilt (z.B. "Letzte 15 Minuten" = 3× 5 Minuten) — sobald ein 4. Clip fertig ist, wird der älteste automatisch gelöscht. Einzelne Clips sind also kürzer als die gewählte Gesamtdauer. Clips, die du behalten willst, vorher unter 🎞️ speichern.</p>
+
+    <label class="cs-label">Live-Verkehr (TomTom)</label>
+    <input id="settings-traffic-key" type="text" placeholder="TomTom API-Key (kostenlos)" autocapitalize="off" autocorrect="off" spellcheck="false" />
+    <label class="cs-toggle-row">
+      <span>Verkehrsanzeige aktiv</span>
+      <input type="checkbox" id="settings-traffic-enable" />
+    </label>
+    <p class="cs-hint">Kostenlosen Key auf developer.tomtom.com anlegen. Wird nur lokal in diesem Browser gespeichert.</p>
+
+    <label class="cs-toggle-row">
+      <span>Debug-HUD anzeigen (Standort/GPS)</span>
+      <input type="checkbox" id="settings-debug-enable" />
+    </label>
+    <p class="cs-hint">Zeigt ein eigenes Overlay über Karte/Kamera an, nicht hier im Einstellungsmenü.</p>
+    <button id="debug-sim-btn" class="cs-hidden">▶ Route simulieren</button>
+    <p class="cs-hint">Simulation läuft unabhängig vom Debug-HUD — erscheint sobald eine Route geplant ist, auch bei ausgeschaltetem HUD.</p>
+
+    <label class="cs-toggle-row">
+      <span>Gebäude auf der Karte anzeigen</span>
+      <input type="checkbox" id="settings-buildings-enable" />
+    </label>
+    <p class="cs-hint">Standardmässig aus: Gebäude werden als echtes 3D (fill-extrusion) gezeichnet, sobald gezoomt genug ist — genau der Zoomstufe, die bei aktiver Navigation verwendet wird. Das ist der mit Abstand teuerste Teil der Kartendarstellung, besonders kombiniert mit der Kippung. Lädt keine zusätzlichen Daten — nur ob gezeichnet wird oder nicht.</p>
+
+    <label class="cs-label">Karte während Navigation</label>
+    <label class="cs-toggle-row">
+      <span>Vogelperspektive (3D-Kippung)</span>
+      <input type="checkbox" id="settings-tilt-enable" />
+    </label>
+    <p class="cs-hint">Unabhängig vom 🧭-Button oben: Der 🧭-Button dreht die Karte in Fahrtrichtung (bzw. lässt sie bei Norden stehen), dieser Schalter kippt sie zusätzlich in die 3D-Ansicht — beides lässt sich einzeln ein-/ausschalten. Alle vier Kombinationen sind damit möglich, z.B. "nach Norden ausgerichtet, ohne Kippung" (beides aus) oder "in Fahrtrichtung gedreht, aber flach von oben" (nur 🧭 an).</p>
+
+    <label class="cs-label">Turn-Banner</label>
+    <label class="cs-toggle-row">
+      <span>Strassennummer-Badge (A1, A2, …)</span>
+      <input type="checkbox" id="settings-turnref-enable" />
+    </label>
+    <label class="cs-toggle-row">
+      <span>Ausfahrt &amp; Fahrtziel-Beschilderung</span>
+      <input type="checkbox" id="settings-turndest-enable" />
+    </label>
+    <label class="cs-toggle-row">
+      <span>Spurführungspfeile</span>
+      <input type="checkbox" id="settings-lanes-enable" />
+    </label>
+    <p class="cs-hint">Strassennummer, Ausfahrt und Fahrtziel stammen aus OSRM/OpenStreetMap und sind nicht überall verfügbar — die Zeile bleibt dann leer, unabhängig von diesen Schaltern.</p>
+
+    <label class="cs-toggle-row">
+      <span>Tunnel-Dunkelmodus</span>
+      <input type="checkbox" id="settings-tunnel-enable" />
+    </label>
+    <p class="cs-hint">Dimmt Karte und Kamera-Ansicht automatisch, sobald die Strasse als Tunnel getaggt ist, und hellt danach wieder auf. Basiert auf OpenStreetMap-Daten — nicht jeder Tunnel ist dort erfasst.</p>
+
+    <div id="camera-settings-actions">
+      <button id="camera-settings-cancel">Abbrechen</button>
+      <button id="camera-settings-apply">Übernehmen</button>
+    </div>
+  </div>
+</div>
+
+<div id="map-wrap">
+  <button id="map-toggle">⤢</button>
+  <div id="map"></div>
+</div>
+
+<div id="hud-bottom">
+  <div id="search-fields">
+    <div id="start-dest-group">
+      <div id="start-dest-stack">
+        <div id="start-row">
+          <input id="start-input" type="text" placeholder="Start: aktueller Standort" autocomplete="off" />
+          <div id="start-suggest" class="suggest-list"></div>
+        </div>
+        <div id="dest-row">
+          <input id="dest-input" type="text" placeholder="Ziel oder Koordinaten (47.37, 8.54)" autocomplete="off" />
+          <div id="dest-suggest" class="suggest-list"></div>
+        </div>
+      </div>
+      <button id="swap-start-dest" title="Start und Ziel tauschen">⇅</button>
+    </div>
+    <button id="dest-go">Los</button>
+  </div>
+  <div id="route-summary">
+    <div id="route-info-row">
+      <span>Ankunft ca. <span class="val" id="eta-val">—</span> · noch <span class="val" id="dist-val">—</span></span>
+      <span id="route-summary-actions">
+        <button id="route-clear" title="Beenden">✕</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<button id="route-start" title="Navigation starten">▶</button>
+
+<div id="clips-sheet">
+  <div id="clips-panel">
+    <button id="close-clips">✕</button>
+    <h2>Aufnahmen dieser Sitzung</h2>
+    <p class="hint">Clips liegen nur im Speicher dieses Tabs — vor dem Schließen der Seite herunterladen.</p>
+    <div id="clips-list"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.12.0/maplibre-gl.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  // ---------- State ----------
+  let stream = null, micStream = null, mediaRecorder = null, recordedChunks = [];
+  let recording = false, recStartTime = 0, timerInterval = null;
+  let map, meMarker, routeLine, routeSteps = [], nextStepIndex = 0;
+  // Für checkRouteProgress(): announcedStepIndex verhindert Mehrfachansagen desselben Schritts (3.9.2).
+  let announcedStepIndex = -1;
+  // War der aktuelle Manöverpunkt schon einmal nah genug erreicht (3.9.7)? Wird EINMAL pro Schritt
+  // gelatcht statt bei jedem GPS-Tick neu verlangt, siehe checkRouteProgress().
+  let reachedManeuverPoint = false;
+  // "Übersicht aktiv" (3.9.6): true zwischen fitRouteOverview() (Route geplant, ganze Strecke
+  // gezeigt) und dem tatsächlichen Navigationsstart bzw. Route-Löschen. Verhindert, dass die
+  // Folgemodus-Kamera und das Bildschirm-Pinning des Standort-Markers (siehe updateMeMarkerPosition
+  // weiter unten) während dieser bewusst NICHT auf den Standort zentrierten Übersicht dazwischenfunken
+  // — siehe fitRouteOverview() für Details zum ursprünglichen Bug.
+  let mapOverviewActive = false;
+  // Restdistanz/-dauer NACH jedem Step, einmalig bei der Routenberechnung vorbereitet (siehe
+  // computeRoute) — erspart updateRouteEtaDist() das Aufsummieren aller restlichen Steps bei
+  // JEDEM GPS-Update
+  let stepRemainingDistAfter = [], stepRemainingDurationAfter = [];
+  let mapStyleLoaded = false; // MapLibre erlaubt addSource/addLayer erst nach dem 'load'-Event
+  let buildingLayerIds = []; // ermittelt nach Style-Load: alle Layer der "building"-Source-Layer
+  // Tunnel-Erkennung (3.8.0): der Liberty-Stil taggt Tunnelstrassen im "transportation"-Source-Layer
+  // über das Feld brunnel="tunnel" — alle Layer, deren Filter genau das abfragen, heissen "tunnel_*".
+  // Komplett lokal (keine Overpass-Anfrage nötig), da die Vektorkacheln ohnehin schon geladen sind.
+  let tunnelLayerIds = [];
+  let tunnelModeEnabled = (localStorage.getItem('fahrspur_tunnel_mode') !== '0'); // Default AN
+  let inTunnel = false;
+  let buildingsVisible = (localStorage.getItem('fahrspur_buildings_visible') === '1'); // Default: AUS — der "building-3d"-Layer im Liberty-Style ist eine fill-extrusion (echtes 3D), aktiv ab Zoom 14 und damit bei jeder Navigation (NAV_ZOOM=17) an; kombiniert mit der 50°-Kippung ist das der teuerste Teil der Karten-Darstellung
+  let lastPos = null, currentSpeedKmh = null, micEnabled = true;
+  let clipCounter = 0;
+  let currentDeviceId = null;
+  const RES_PRESETS = {
+    '720p': { width: 1280, height: 720 },
+    '1080p': { width: 1920, height: 1080 },
+    'max': { width: 3840, height: 2160 }
+  };
+  let recRes = RES_PRESETS['1080p'];
+  const FORMAT_CANDIDATES = [
+    { label: 'MP4 (H.264) — läuft überall', mime: 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', ext: 'mp4' },
+    { label: 'MP4 (H.264)', mime: 'video/mp4', ext: 'mp4' },
+    { label: 'WebM (VP9) — kleiner, weniger kompatibel', mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
+    { label: 'WebM (VP8)', mime: 'video/webm;codecs=vp8,opus', ext: 'webm' },
+    { label: 'WebM (Standard)', mime: 'video/webm', ext: 'webm' }
+  ];
+  let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
+
+  const APP_VERSION = '4.5.1';
+  document.addEventListener('DOMContentLoaded', () => {
+    const tag = document.getElementById('app-version-tag');
+    if (tag) tag.textContent = 'v' + APP_VERSION;
+  });
+
+  const el = id => document.getElementById(id);
+  const cameraEl = el('camera');
+  const canvas = el('overlayCanvas');
+  const ctx = canvas.getContext('2d');
+
+  function fitCanvas(){
+    canvas.width = recRes.width;
+    canvas.height = recRes.height;
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  function drawCover(ctx, video, cw, ch){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    const scale = Math.max(cw / vw, ch / vh);
+    const dw = vw * scale, dh = vh * scale;
+    const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+    ctx.drawImage(video, dx, dy, dw, dh);
+  }
+
+  async function openCamera(deviceId, preset){
+    // frameRate begrenzen: drawLoop() zeichnet ohnehin nur mit CANVAS_FPS (24) — ohne diese
+    // Constraint liefert die Kamera-Hardware oft mit voller nativer Rate (häufig 30fps, teils
+    // mehr), die restlichen Frames wurden bisher ungenutzt verworfen. "ideal" statt "exact", da
+    // nicht jede Kamera/jeder Modus exakt 24fps unterstützt — der Browser wählt den nächsten
+    // unterstützten Wert, schlimmstenfalls bleibt es wie zuvor bei der nativen Rate.
+    const videoConstraints = { facingMode: { ideal: 'environment' }, frameRate: { ideal: CANVAS_FPS, max: 30 } };
+    if (deviceId) { delete videoConstraints.facingMode; videoConstraints.deviceId = { exact: deviceId }; }
+    if (preset && preset !== RES_PRESETS['max']) {
+      videoConstraints.width = { ideal: preset.width };
+      videoConstraints.height = { ideal: preset.height };
+    } else {
+      videoConstraints.width = { ideal: 3840 };
+      videoConstraints.height = { ideal: 2160 };
+    }
+    const newStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = newStream;
+    cameraEl.srcObject = stream;
+  }
+
+  function detectSupportedFormats(){
+    const supported = FORMAT_CANDIDATES.filter(f => {
+      try { return MediaRecorder.isTypeSupported(f.mime); } catch(e){ return false; }
+    });
+    return supported.length ? supported : [{ label: 'WebM (Browser-Standard)', mime: '', ext: 'webm' }];
+  }
+
+  // ---------- Permission gate ----------
+  function getCurrentPositionPromise(options){
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, options);
+    });
+  }
+
+  let grantAccessInFlight = false; // verhindert doppelten openCamera()/initMap()-Aufruf bei Doppel-Tap
+  el('grant-access').addEventListener('click', async () => {
+    if (grantAccessInFlight) return;
+    grantAccessInFlight = true;
+    el('permission-error').textContent = '';
+    // Standort-Dialog vollständig abwarten, BEVOR die Kamera-Anfrage startet —
+    // gleichzeitige/überlappende Berechtigungsdialoge lässt iOS teils
+    // stillschweigend fallen, ohne den Standort-Dialog je aufzulösen
+    if (navigator.geolocation) {
+      setSpeedDisplay('GPS?', false);
+      gpsDebug.watchRegisteredAt = new Date().toLocaleTimeString('de-CH');
+      renderGpsDebug();
+      try {
+        const firstFix = await getCurrentPositionPromise({ enableHighAccuracy:true, timeout:10000, maximumAge:0 });
+        onPosition(firstFix);
+      } catch(err) {
+        onPosError(err);
+      }
+      // Danach laufend weitere Updates empfangen
+      navigator.geolocation.watchPosition(onPosition, onPosError, {
+        enableHighAccuracy:true, maximumAge:1000, timeout:8000
+      });
+    }
+    try {
+      await openCamera(null, recRes);
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch(e){ micStream = null; micEnabled = false; }
+
+      fitCanvas();
+      const supportedFormats = detectSupportedFormats();
+      selectedFormat = supportedFormats[0];
+
+      initMap();
+      startDrawLoop();
+      requestWakeLock();
+      updateClipsBadge();
+      el('permission-gate').style.display = 'none';
+    } catch (err) {
+      el('permission-error').textContent = 'Zugriff verweigert oder nicht verfügbar: ' + err.message + '. Diese Seite muss über HTTPS laufen (nicht als lokale Datei geöffnet).';
+      grantAccessInFlight = false; // erneuter Versuch nach Fehler soll wieder möglich sein
+    }
+  });
+
+  // ---------- Geolocation ----------
+  const NAV_ZOOM = 17; // "Straße voraus"-Zoomstufe während aktiver Navigation
+  // Kamera bei Navigation höchstens alle 250ms neu einstellen statt bei jedem GPS-Fix — auf
+  // iPhones mit potenziell dichterer GPS-Fix-Rate verhindert das, dass laufend neue easeTo()-
+  // Animationen gestartet/abgebrochen werden, was Haupt-/GPU-Thread unnötig belastet
+  const NAV_CAMERA_UPDATE_MS = 250;
+  let lastCameraUpdate = 0;
+  let smoothedHeading = null; // gedämpfter Kompasswert fürs Rotieren — roh ist GPS-heading recht verrauscht
+  function smoothHeadingDeg(newDeg){
+    if (smoothedHeading === null) { smoothedHeading = newDeg; return newDeg; }
+    const delta = ((newDeg - smoothedHeading + 540) % 360) - 180; // kürzester Winkel, verhindert Sprung bei 0°/360°-Übergang
+    smoothedHeading = (smoothedHeading + delta * 0.35 + 360) % 360; // alpha=0.35: dämpft Ausreißer, bleibt aber reaktionsschnell
+    return smoothedHeading;
+  }
+  let isNavigating = false;
+  let hasGpsFix = false;
+  let gpsDebugTimer = null;
+  let debugEnabled = (localStorage.getItem('fahrspur_debug_enabled') === '1');
+  let rotateEnabled = (localStorage.getItem('fahrspur_rotate_enabled') === '1');
+  // 3.9.12: Kippung (Vogelperspektive) jetzt unabhängig von rotateEnabled — Default AN, damit sich das
+  // bisherige Verhalten (Kippung lief bisher zwingend an rotateEnabled gekoppelt) für bestehende
+  // Installationen nicht ändert, solange niemand den neuen Schalter aktiv ausschaltet.
+  let tiltEnabled = (localStorage.getItem('fahrspur_tilt_enabled') !== '0');
+  // Turn-Banner-Zusatzfunktionen (3.7.1) — alle standardmässig AN (!== '0' statt === '1'), damit
+  // bestehende Installationen ohne gespeicherten Wert das neue Verhalten weiterhin sehen
+  let showRoadRef = (localStorage.getItem('fahrspur_turnbanner_ref') !== '0');
+  let showDestinations = (localStorage.getItem('fahrspur_turnbanner_dest') !== '0');
+  let showLaneGuidance = (localStorage.getItem('fahrspur_turnbanner_lanes') !== '0');
+  // 4.3.0: "Beim Start Karte statt Kamera groß anzeigen" als eigener Menüpunkt entfernt (Einstellungen
+  // vereinfacht, auf Wunsch) — kein localStorage-Key mehr nötig, fester Default statt einstellbarem Wert.
+  // 4.4.0: Default umgedreht — jetzt Karte groß / Kamera klein beim Start (zuvor umgekehrt). Der
+  // interaktive Karte/Kamera-Tausch-Button (swap-view) während der Nutzung bleibt unverändert nutzbar.
+  document.body.classList.add('swap-view');
+
+  // ---------- Tempolimit (OSM/Overpass) ----------
+  let lastLimitFetchPos = null, lastLimitFetchTime = 0;
+  const LIMIT_MIN_GAP_MS = 15000;
+  const LIMIT_MIN_MOVE_M = 80;
+
+  // Länder-typische implizite Limits, falls die Straße kein explizites Tempolimit-Tag trägt
+  const IMPLICIT_LIMITS = {
+    'CH:urban': 50, 'CH:rural': 80, 'CH:motorway': 120, 'CH:trunk': 100,
+    'DE:urban': 50, 'DE:rural': 100, 'DE:motorway': null,
+    'AT:urban': 50, 'AT:rural': 100, 'AT:motorway': 130,
+    'FR:urban': 50, 'FR:rural': 80, 'FR:motorway': 130,
+    'IT:urban': 50, 'IT:rural': 90, 'IT:motorway': 130
+  };
+
+  function parseMaxspeed(raw){
+    if (!raw) return null;
+    const num = parseInt(raw, 10);
+    if (!isNaN(num) && /^\d+/.test(raw.trim())) return num;
+    if (IMPLICIT_LIMITS.hasOwnProperty(raw)) return IMPLICIT_LIMITS[raw];
+    return null;
+  }
+
+  // Bestimmt die lokale Fahrtrichtung eines Overpass-Kandidaten nahe der eigenen Position (nicht
+  // Start/Ende des ganzen Wegs) — Grundlage für pickSpeedLimitWay()'s Kandidatenauswahl bei mehreren
+  // Strassen im Suchradius. Hintergrund/Bugfix: siehe CHANGELOG 4.5.0.
+  function overpassWayBearingNear(way, pos){
+    const g = way.geometry;
+    if (!g || g.length < 2) return null;
+    let bestIdx = 0, bestDist = Infinity;
+    for (let i = 0; i < g.length; i++){
+      const d = distMeters(pos, { lat: g[i].lat, lon: g[i].lon });
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    const i0 = Math.max(0, bestIdx - 1), i1 = Math.min(g.length - 1, bestIdx + 1);
+    if (i0 === i1) return null;
+    return bearingDegLL(g[i0].lat, g[i0].lon, g[i1].lat, g[i1].lon);
+  }
+
+  function pickSpeedLimitWay(ways, pos, headingDeg, onMotorway){
+    if (!ways.length) return null;
+    let candidates = ways;
+    if (onMotorway) {
+      const motorwayWays = ways.filter(w => w.tags.highway === 'motorway' || w.tags.highway === 'motorway_link');
+      if (motorwayWays.length) candidates = motorwayWays;
+    }
+    if (candidates.length === 1 || typeof headingDeg !== 'number') return candidates[0]; // kein Heading — altes Verhalten
+    let best = null, bestDiff = Infinity;
+    for (const w of candidates) {
+      const b = overpassWayBearingNear(w, pos);
+      if (b === null) continue;
+      const diff = angleDiffMod180(headingDeg, b);
+      if (diff < bestDiff) { bestDiff = diff; best = w; }
+    }
+    return best || candidates[0]; // Fallback: keine Geometrie/Richtung bestimmbar
+  }
+
+  async function fetchSpeedLimit(lat, lon, headingDeg, onMotorway){
+    const now = Date.now();
+    if (now - lastLimitFetchTime < LIMIT_MIN_GAP_MS) return;
+    if (lastLimitFetchPos) {
+      const moved = distMeters(lastLimitFetchPos, { lat, lon });
+      if (moved < LIMIT_MIN_MOVE_M) return;
+    }
+    lastLimitFetchTime = now;
+    lastLimitFetchPos = { lat, lon };
+
+    const query = `[out:json][timeout:8];way(around:35,${lat},${lon})[highway][maxspeed];out geom tags 5;`;
+    try {
+      const res = await fetch('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query));
+      if (!res.ok) return;
+      const data = await res.json();
+      const ways = (data.elements || []).filter(w => w.tags && w.tags.maxspeed);
+      const way = pickSpeedLimitWay(ways, { lat, lon }, headingDeg, onMotorway);
+      const limit = way ? parseMaxspeed(way.tags.maxspeed) : null;
+      const sign = el('speed-limit-sign');
+      if (limit) {
+        sign.textContent = limit;
+        sign.classList.add('show');
+      } else {
+        sign.classList.remove('show');
+      }
+    } catch(e) { /* offline oder Overpass nicht erreichbar — still bleiben */ }
+  }
+
+  // Tunnel-Dunkelmodus (3.8.0): dimmt Karte + Kamera-Ansicht, sobald der aktuelle Standort auf
+  // einer als Tunnel getaggten Strasse liegt, und hellt danach wieder automatisch auf. Komplett
+  // lokal über die bereits geladenen Vektorkacheln (queryRenderedFeatures auf die tunnel_*-Layer,
+  // siehe tunnelLayerIds) — kein zusätzlicher Netzwerk-Call wie bei fetchSpeedLimit() nötig, daher
+  // auch kein Throttling erforderlich, es läuft bei jedem GPS-Tick einfach mit.
+  let lastTunnelCheckPos = null;
+  const TUNNEL_CHECK_MIN_MOVE_M = 8; // wie LIMIT_MIN_MOVE_M bei fetchSpeedLimit() — spart die Abfrage bei Stillstand/Schrittgeschwindigkeit
+  // Kreuzungs-Filter (3.9.8): queryRenderedFeatures() prüft nur 2D-Bildschirmkoordinaten, kennt also
+  // keine Höhe/Ebene — quert man auf einer eigenen (nicht getaggten) Strasse einen Tunnel rechtwinklig
+  // (z.B. auf einer Überführung), liegt man an genau dieser Stelle trotzdem exakt auf der Tunnellinie.
+  // Zusatz-Heuristik: Richtung der gefundenen Tunnellinie (Start-/Endpunkt der Geometrie, ausreichend
+  // für die kurzen Abschnitte hier) mit dem aktuellen (gedämpften) GPS-Heading vergleichen — nahezu
+  // rechtwinklig (~90°) heisst "ich quere nur", nahezu parallel (~0°) heisst "ich fahre im Tunnel".
+  // Ohne verfügbares Heading (z.B. Fahrzeug steht) bleibt es beim alten Verhalten (Layer-Treffer genügt).
+  const TUNNEL_ALIGN_MAX_DEG = 55; // bis zu diesem Winkel gilt "fahre entlang", darüber "quere nur"
+  // Bewusst NICHT "bearingDeg" genannt: Namenskollision mit der 2-Parameter-Simulationsfunktion
+  // weiter unten liess diese 4-Parameter-Variante bis 4.5.0 durchgehend NaN liefern (JS überschreibt
+  // gleichnamige Funktionsdeklarationen mit der zuletzt im Quelltext stehenden) — siehe CHANGELOG
+  // 4.5.0 und README (Fallstricke) für Details. Vor einer Umbenennung: beide Aufrufer prüfen.
+  function bearingDegLL(lat1, lon1, lat2, lon2){
+    const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+  function angleDiffMod180(a, b){
+    let d = Math.abs(a - b) % 180;
+    if (d > 90) d = 180 - d;
+    return d; // 0 = parallel, 90 = rechtwinklig
+  }
+  function tunnelFeatureBearing(feature){
+    const g = feature.geometry;
+    if (!g) return null;
+    let coords = null;
+    if (g.type === 'LineString' && g.coordinates.length >= 2) coords = g.coordinates;
+    else if (g.type === 'MultiLineString' && g.coordinates.length && g.coordinates[0].length >= 2) coords = g.coordinates[0];
+    if (!coords) return null;
+    const [lon1, lat1] = coords[0];
+    const [lon2, lat2] = coords[coords.length - 1];
+    if (lon1 === lon2 && lat1 === lat2) return null;
+    return bearingDegLL(lat1, lon1, lat2, lon2);
+  }
+  function checkTunnel(lon, lat){
+    if (!tunnelModeEnabled || !mapStyleLoaded || !tunnelLayerIds.length) {
+      if (inTunnel) { inTunnel = false; document.body.classList.remove('tunnel-mode'); }
+      return;
+    }
+    // Bewegungs-Schwelle wie bei fetchSpeedLimit() (siehe 3.9.0) — queryRenderedFeatures() ist zwar
+    // lokal (kein Netzwerk-Call), aber nicht ganz kostenlos, und bei Stillstand/Stop-and-go würde
+    // sie sonst bei jedem GPS-Tick unverändert wiederholt. Während einer AKTIVEN Tunneldurchfahrt
+    // bewusst NICHT gedrosselt, damit das Wiederaufhellen am Tunnelausgang ohne Verzögerung kommt.
+    if (!inTunnel && lastTunnelCheckPos) {
+      const moved = distMeters(lastTunnelCheckPos, { lat, lon });
+      if (moved < TUNNEL_CHECK_MIN_MOVE_M) return;
+    }
+    lastTunnelCheckPos = { lat, lon };
+    let isTunnel = false;
+    try {
+      const pt = map.project([lon, lat]);
+      // Kleine Box statt exaktem Punkt: etwas Toleranz gegen GPS-Ungenauigkeit/Rundung bei der
+      // Projektion, damit die Erkennung nicht exakt auf der Linienmitte treffen muss
+      const feats = map.queryRenderedFeatures(
+        [[pt.x - 4, pt.y - 4], [pt.x + 4, pt.y + 4]],
+        { layers: tunnelLayerIds }
+      );
+      for (const f of feats) {
+        if (smoothedHeading === null) { isTunnel = true; break; } // kein Heading verfügbar — alter, sichererer Fallback
+        const b = tunnelFeatureBearing(f);
+        if (b === null) { isTunnel = true; break; } // Richtung nicht bestimmbar — im Zweifel lieber melden als übersehen
+        if (angleDiffMod180(smoothedHeading, b) <= TUNNEL_ALIGN_MAX_DEG) { isTunnel = true; break; }
+        // sonst: nahezu rechtwinklig zur Fahrtrichtung — vermutlich nur gequert, nicht befahren
+      }
+    } catch (e) { /* Style/Layer im Moment der Abfrage ausnahmsweise noch nicht bereit */ }
+    if (isTunnel !== inTunnel) {
+      inTunnel = isTunnel;
+      document.body.classList.toggle('tunnel-mode', inTunnel);
+    }
+  }
+
+  function setSpeedDisplay(text, isNumeric){
+    el('speed-val').textContent = text;
+    el('speed-unit').style.display = isNumeric ? '' : 'none';
+  }
+
+  // ---------- Debug: Standort/GPS ----------
+  const gpsDebug = {
+    geoApiPresent: (typeof navigator.geolocation !== 'undefined'),
+    permissionState: 'unbekannt',
+    watchRegisteredAt: null,
+    posCount: 0,
+    errCount: 0,
+    lastPos: null,
+    lastErr: null,
+    lastLanes: null // 4.2.0 — zur Diagnose von Spuranzeige-Abweichungen (siehe renderLaneGuidance())
+  };
+
+  let lastGpsDebugRenderAt = 0;
+  const GPS_DEBUG_MIN_INTERVAL_MS = 900; // ~1x/Sekunde reicht fürs Debug-HUD — spart DOM-Writes bei jedem GPS-Fix
+  function renderGpsDebug(){
+    updateSimButtonState(); // bleibt unabhängig vom Throttle sofort reaktiv (billig, keine Textformatierung)
+    const el2 = document.getElementById('debug-hud');
+    if (!el2) return;
+    const now = performance.now();
+    if (now - lastGpsDebugRenderAt < GPS_DEBUG_MIN_INTERVAL_MS) return; // Text-Aufbau/DOM-Write drosseln
+    lastGpsDebugRenderAt = now;
+    const lines = [
+      'Geolocation-API vorhanden: ' + (gpsDebug.geoApiPresent ? 'ja' : 'nein'),
+      'Berechtigungsstatus: ' + gpsDebug.permissionState,
+      'watchPosition angemeldet: ' + (gpsDebug.watchRegisteredAt || 'noch nicht'),
+      'Erfolgreiche Fixes: ' + gpsDebug.posCount,
+      'Fehler-Callbacks: ' + gpsDebug.errCount
+    ];
+    if (gpsDebug.lastPos) {
+      lines.push('Letzter Fix (' + gpsDebug.lastPos.time + '):');
+      lines.push('  lat=' + gpsDebug.lastPos.lat + '  lon=' + gpsDebug.lastPos.lon);
+      lines.push('  accuracy=' + gpsDebug.lastPos.accuracy + 'm  speed=' + gpsDebug.lastPos.speed);
+    }
+    if (gpsDebug.lastErr) {
+      lines.push('Letzter Fehler (' + gpsDebug.lastErr.time + '):');
+      lines.push('  code=' + gpsDebug.lastErr.code + '  ' + gpsDebug.lastErr.message);
+    }
+    // 4.2.0 — Diagnose für Spuranzeige: Strasse/Ref der Kreuzung + rohe indications pro Spur
+    // (* markiert "valid"), um gemeldete Abweichungen gegen die tatsächliche OSM-Beschilderung
+    // nachvollziehen zu können, ohne selbst die OSRM-Rohantwort mitschneiden zu müssen.
+    if (gpsDebug.lastLanes) {
+      lines.push('Spuranzeige — Strasse: ' + gpsDebug.lastLanes.name + '  Ref: ' + gpsDebug.lastLanes.ref);
+      lines.push('  Anzahl Spuren: ' + gpsDebug.lastLanes.count);
+      lines.push('  Rohdaten: ' + gpsDebug.lastLanes.indications);
+    }
+    el2.textContent = lines.join('\n');
+  }
+
+  // ---------- Debug: Routensimulation ----------
+  let simulationActive = false, simulationTimer = null;
+  const SIM_TICK_MS = 400;
+  const SIM_FALLBACK_SPEED_MS = 11.1; // ~40 km/h, falls (noch) kein Tempolimit erkannt wurde
+  let simDistanceTraveled = 0;
+  let simCursorIndex = 0;
+  // 4.3.0 — Nur während der Simulation: Antippen der Geschwindigkeits-Anzeige setzt die simulierte
+  // Geschwindigkeit testweise auf 150 km/h (z.B. um Verhalten bei hoher Geschwindigkeit zu prüfen,
+  // ohne die ganze Route neu abfahren zu müssen); nochmaliges Antippen setzt wieder zurück auf das
+  // normale Verhalten (erkanntes Tempolimit, sonst SIM_FALLBACK_SPEED_MS). Ohne Effekt auf eine
+  // echte, nicht simulierte Fahrt.
+  const SIM_SPEED_BOOST_KMH = 150;
+  let simSpeedOverrideKmh = null;
+
+  function bearingDeg(a, b){
+    const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+    const dLon = toRad(b.lon - a.lon);
+    const y = Math.sin(dLon) * Math.cos(toRad(b.lat));
+    const x = Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) -
+              Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(dLon);
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  // Position entlang der Route anhand der zurückgelegten Distanz interpolieren
+  // (statt einfach einen Punkt pro Tick weiterzugehen) — nötig, damit sich die
+  // Simulationsgeschwindigkeit auch wirklich in der Fortbewegung niederschlägt
+  function pointAtDistance(targetDist){
+    if (targetDist <= 0) return { point: routeCoordsFlat[0], done: false };
+    const total = routeCumulativeDist[routeCumulativeDist.length - 1];
+    if (targetDist >= total) return { point: routeCoordsFlat[routeCoordsFlat.length - 1], done: true };
+    while (simCursorIndex < routeCumulativeDist.length - 2 && routeCumulativeDist[simCursorIndex + 1] < targetDist) {
+      simCursorIndex++;
+    }
+    const segStart = routeCumulativeDist[simCursorIndex], segEnd = routeCumulativeDist[simCursorIndex + 1];
+    const t = segEnd > segStart ? (targetDist - segStart) / (segEnd - segStart) : 0;
+    const a = routeCoordsFlat[simCursorIndex], b = routeCoordsFlat[simCursorIndex + 1];
+    return {
+      point: { lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) },
+      done: false
+    };
+  }
+
+  function currentSimSpeedMs(){
+    if (simSpeedOverrideKmh !== null) return simSpeedOverrideKmh / 3.6; // 4.3.0: manueller Boost hat Vorrang
+    const sign = document.getElementById('speed-limit-sign');
+    if (sign && sign.classList.contains('show')) {
+      const kmh = parseInt(sign.textContent, 10);
+      if (!isNaN(kmh) && kmh > 0) return kmh / 3.6;
+    }
+    return SIM_FALLBACK_SPEED_MS;
+  }
+
+  // 4.3.0: Antippen der Geschwindigkeits-Anzeige — nur während laufender Simulation wirksam (bei
+  // echter Fahrt zeigt speed-chip die reale GPS-Geschwindigkeit an, daran wird nichts verändert).
+  // WICHTIG: speed-chip hat weiter unten (Steuerelemente-Leiste) bereits einen eigenen Klick-Handler,
+  // der stattdessen die HUD-Leiste ein-/ausklappt. Damit ein Tap während der Simulation nicht BEIDES
+  // gleichzeitig auslöst, wird dieser Handler zuerst registriert (läuft daher zuerst) und unterdrückt
+  // den späteren Handler per stopImmediatePropagation(), sobald er selbst zuständig war.
+  el('speed-chip').addEventListener('click', e => {
+    if (!simulationActive) return;
+    simSpeedOverrideKmh = (simSpeedOverrideKmh === null) ? SIM_SPEED_BOOST_KMH : null;
+    e.stopImmediatePropagation();
+  });
+
+  function updateSimButtonState(){
+    const btn = document.getElementById('debug-sim-btn');
+    if (!btn) return;
+    // Unabhängig von debugEnabled (siehe 3.8.0) — die Simulation selbst braucht kein Debug-HUD,
+    // nur eine geplante Route. Der Button lebt weiterhin im Einstellungsmenü (kein eigener
+    // Toggle nötig), ist aber nicht mehr an "Debug-HUD anzeigen" gekoppelt.
+    if (!routeCoordsFlat || routeCoordsFlat.length < 2) {
+      btn.classList.add('cs-hidden');
+      return;
+    }
+    btn.classList.remove('cs-hidden');
+    btn.classList.toggle('active', simulationActive);
+    btn.textContent = simulationActive
+      ? '■ Simulation stoppen'
+      : '▶ Route simulieren (Tempolimit, falls erkannt)';
+  }
+
+  // 3.9.11: merkt sich, ob DIE SIMULATION isNavigating selbst auf true gesetzt hat (siehe unten) —
+  // nur dann darf stopSimulation() es beim Beenden auch wieder zurücksetzen, sonst würde ein Stopp
+  // während einer PARALLEL laufenden echten Navigation (Route bereits über "Route starten" aktiv)
+  // diese fälschlich mit abschalten.
+  let simActivatedIsNavigating = false;
+
+  function startSimulation(){
+    if (!routeCoordsFlat || routeCoordsFlat.length < 2 || !routeCumulativeDist) return;
+    simulationActive = true;
+    simDistanceTraveled = 0;
+    simCursorIndex = 0;
+    // Navigationsfortschritt bei jedem (Neu-)Start zurücksetzen — sonst bliebe er nach Stopp+Neustart
+    // auf dem alten Schritt stehen, während die simulierte Position wieder am Routenanfang ist
+    // (Bugfix 3.9.4). isNavigating selbst setzen, damit checkRouteProgress() auch ohne vorheriges
+    // "Route starten" läuft (Bugfix 3.9.11) — Details siehe CHANGELOG.
+    nextStepIndex = 0;
+    announcedStepIndex = -1;
+    reachedManeuverPoint = false;
+    offRouteStreak = 0; rerouteSearchIndex = 0;
+    simActivatedIsNavigating = !isNavigating;
+    if (!isNavigating) {
+      isNavigating = true;
+      mapOverviewActive = false;
+      el('route-start').classList.add('show', 'following');
+      el('route-start').textContent = '◎';
+      el('route-start').title = 'Folgt der Fahrt — antippen zum Zentrieren';
+    }
+    if (routeSteps.length) { rebuildGeomForCurrentSegment(); showStep(0); }
+    updateSimButtonState();
+    simulationTimer = setInterval(() => {
+      const speedMs = currentSimSpeedMs();
+      const prevPoint = pointAtDistance(simDistanceTraveled).point;
+      simDistanceTraveled += speedMs * (SIM_TICK_MS / 1000);
+      const { point, done } = pointAtDistance(simDistanceTraveled);
+      const heading = bearingDeg(prevPoint, point);
+      onPosition({
+        __simulated: true,
+        coords: { latitude: point.lat, longitude: point.lon, speed: speedMs, heading, accuracy: 5 }
+      });
+      if (done) stopSimulation();
+    }, SIM_TICK_MS);
+  }
+
+  function stopSimulation(){
+    simulationActive = false;
+    clearInterval(simulationTimer);
+    applyMapRotation(0);
+    simSpeedOverrideKmh = null; // 4.3.0: Boost nicht in die nächste Simulation/Fahrt mitnehmen
+    // 3.9.11: isNavigating nur zurücksetzen, wenn die Simulation es selbst gesetzt hatte (siehe
+    // startSimulation) — war schon vorher eine echte Navigation aktiv, bleibt sie das auch danach.
+    if (simActivatedIsNavigating) {
+      isNavigating = false;
+      simActivatedIsNavigating = false;
+      el('route-start').classList.remove('following');
+      el('route-start').textContent = '▶';
+      el('route-start').title = 'Navigation starten';
+    }
+    updateSimButtonState();
+  }
+
+  document.addEventListener('click', e => {
+    if (e.target && e.target.id === 'debug-sim-btn') {
+      if (simulationActive) {
+        stopSimulation();
+      } else {
+        startSimulation();
+        // 3.9.10: Einstellungsmenü direkt schliessen, sobald die Simulation gestartet wird — man
+        // sieht sofort Karte/Turn-Banner statt noch selbst auf "Abbrechen"/Wegtippen tippen zu
+        // müssen. Gleiches Vorgehen wie beim "Abbrechen"-Button (siehe camera-settings-cancel).
+        el('camera-settings-sheet').classList.remove('show');
+        clearInterval(gpsDebugTimer);
+      }
+    }
+  });
+
+  // Turn-Banner antippen: stoppt eine laufende Simulation, sonst startet es sie (auch mit bereits
+  // aktivem "Route starten" — kollidiert nie mit einer echten Fahrt, da onPosition() während der
+  // Simulation ausschliesslich simulierte Updates verarbeitet). Siehe CHANGELOG 3.9.10/3.9.11.
+  el('turn-banner').addEventListener('click', () => {
+    if (simulationActive) { stopSimulation(); return; }
+    if (routeCoordsFlat && routeCoordsFlat.length >= 2) startSimulation();
+  });
+
+  if (navigator.permissions && navigator.permissions.query) {
+    navigator.permissions.query({ name: 'geolocation' }).then(status => {
+      gpsDebug.permissionState = status.state;
+      renderGpsDebug();
+      status.onchange = () => { gpsDebug.permissionState = status.state; renderGpsDebug(); };
+    }).catch(() => { gpsDebug.permissionState = 'nicht abfragbar'; renderGpsDebug(); });
+  } else {
+    gpsDebug.permissionState = 'Permissions-API nicht unterstützt';
+  }
+
+  function onPosition(p){
+    if (simulationActive && !p.__simulated) return; // während Simulation keine echten Updates dazwischenfunken lassen
+    const { latitude, longitude, speed, accuracy } = p.coords;
+    lastPos = { lat: latitude, lon: longitude };
+
+    gpsDebug.posCount++;
+    gpsDebug.lastPos = { lat: latitude, lon: longitude, accuracy, speed, time: new Date().toLocaleTimeString('de-CH') };
+    renderGpsDebug();
+
+    if (typeof speed === 'number' && speed !== null && !isNaN(speed)) {
+      currentSpeedKmh = Math.max(0, speed * 3.6);
+    }
+    // Ausserhalb von "if (map && meMarker)" berechnet, weil checkRouteProgress() weiter unten
+    // (auch ohne Karte theoretisch aufrufbar) das aktuelle Heading für die Richtungsprüfung beim
+    // Manöver-Abschluss braucht (siehe dort, 3.9.6) — hängt nicht von der Karte ab.
+    const hasHeading = typeof p.coords.heading === 'number' && !isNaN(p.coords.heading);
+    const heading = hasHeading ? smoothHeadingDeg(p.coords.heading) : null;
+    // Karten-/Kamera-Nachführung läuft in einem EIGENEN try/catch, unabhängig von der Distanz-/
+    // Manöver-Logik unten — ein Fehler hier (z.B. MapLibre-Zwischenzustand) darf die Turn-Banner-
+    // Distanz nie mehr einfrieren lassen (Bugfix 3.9.14, siehe CHANGELOG).
+    try {
+      setSpeedDisplay(currentSpeedKmh !== null ? Math.round(currentSpeedKmh) : '--', currentSpeedKmh !== null);
+      // Aktuell befahrener Schritt ist nextStepIndex-1 (Konvention, siehe README) — NICHT nextStepIndex
+      // (das ist die anstehende, noch nicht erreichte Abzweigung). Für pickSpeedLimitWay()'s Autobahn-Vorfilter.
+      const curIdx = nextStepIndex - 1;
+      const activeStep = (isNavigating && curIdx >= 0 && curIdx < routeSteps.length) ? routeSteps[curIdx] : null;
+      const onMotorway = !!(activeStep && activeStep.ref && MOTORWAY_REF_RE.test(activeStep.ref));
+      fetchSpeedLimit(latitude, longitude, heading, onMotorway);
+      if (map) checkTunnel(longitude, latitude);
+
+      if (map && meMarker) {
+        if (!hasGpsFix) {
+          hasGpsFix = true;
+          meMarker.style.opacity = '1';
+          map.jumpTo({ center: [longitude, latitude], zoom: NAV_ZOOM }); // beim ersten Fix direkt auf echte Position springen
+        }
+        // Drehen (bearing) funktioniert jetzt auch ohne aktive Route, sobald der 🧭-Schalter an ist.
+        // Automatisches Tilten (pitch) bleibt dagegen exklusiv an eine aktive Navigation gekoppelt —
+        // nur das MANUELLE Tilten per Geste ist (bereits über touchPitch:false) deaktiviert.
+        const shouldRotate = rotateEnabled && !map.__userMoved && hasHeading;
+        // 3.9.12: Kippung war bisher zwingend an shouldRotate gekoppelt (nur gedreht+gekippt oder
+        // weder-noch) — jetzt eigener, unabhängiger Schalter (tiltEnabled), damit auch "nach Norden
+        // ausgerichtet + gekippt" bzw. "in Fahrtrichtung gedreht + flach" möglich sind, wie gewünscht.
+        const shouldTilt = tiltEnabled && isNavigating;
+
+        if (isNavigating && hasHeading) {
+          const carEl = meMarker.querySelector('.me-marker-car');
+          // Dreht die Karte sich per bearing schon auf die Fahrtrichtung, zeigt das
+          // bildschirmfixe Auto-Icon automatisch "nach oben" — sonst zeigt das Icon selbst die Richtung
+          if (carEl) carEl.style.transform = shouldRotate ? '' : `rotate(${heading}deg)`;
+        }
+
+        // Richtungsfächer am Standort-Punkt (wie bei Google Maps) — nur relevant, solange KEINE
+        // Route läuft (der Marker dann noch der einfache Punkt ist, nicht das Auto-Icon). Zeigt die
+        // Blickrichtung unabhängig davon, ob der 🧭-Schalter die Karte selbst mitdreht: Fächer-Winkel
+        // = Heading minus aktuelle Kartendrehung, also immer bildschirmkorrekt — dreht die Karte
+        // durch den 🧭-Schalter mit, richtet sich der Fächer dabei von selbst nach oben aus.
+        const fanEl = meMarker.querySelector('.me-marker-fan');
+        if (fanEl) {
+          if (!isNavigating && hasHeading) {
+            fanEl.style.transform = `rotate(${heading - map.getBearing()}deg)`;
+            fanEl.classList.add('show');
+          } else {
+            fanEl.classList.remove('show');
+          }
+        }
+
+        // !mapOverviewActive: während der bewusst nicht auf den Standort zentrierten Routen-
+        // Übersicht (fitRouteOverview(), nach Routeneingabe vor Navigationsstart) darf diese
+        // periodische Nachführung NICHT dazwischenfunken — sonst kämpft sie mit dem fitBounds()
+        // der Übersicht um die Kamera, sichtbar als "wandernder"/zurückspringender Standort-Punkt,
+        // sobald der 🧭-Schalter (rotateEnabled) an ist (siehe fitRouteOverview(), 3.9.6).
+        if ((isNavigating || rotateEnabled) && !map.__userMoved && !mapOverviewActive) {
+          // Throttling: höchstens alle NAV_CAMERA_UPDATE_MS eine neue Kamera-Animation starten,
+          // statt bei jedem GPS-Fix. Schwenken, Drehen und Kippen bleiben in einem einzigen
+          // easeTo-Aufruf gebündelt, damit sich die Änderungen nicht gegenseitig unterbrechen
+          const nowTs = performance.now();
+          if (nowTs - lastCameraUpdate >= NAV_CAMERA_UPDATE_MS) {
+            lastCameraUpdate = nowTs;
+            map.easeTo({
+              center: [longitude, latitude],
+              bearing: shouldRotate ? heading : 0,
+              pitch: shouldTilt ? NAV_PITCH : 0,
+              duration: NAV_CAMERA_UPDATE_MS
+            });
+          }
+        } else if (map.getBearing() !== 0 || map.getPitch() !== 0) {
+          // NUR zurücksetzen, wenn die Karte tatsächlich noch gedreht ist (z.B. kurz nach
+          // Navigationsende) — sonst würde dieser sonst bei JEDEM GPS-Tick abgefeuerte, "unnötige"
+          // Reset-Aufruf jede andere laufende Kamera-Animation abbrechen, z.B. die fitBounds()-Übersicht
+          // direkt nach dem Routenplanen
+          applyMapRotation(0);
+        }
+        // Ausserhalb des Folgemodus löst keine der obigen Kamera-Methoden zwingend ein 'move'-Event
+        // aus (z.B. wenn der Nutzer die Karte manuell verschoben hat) — der Punkt muss dann trotzdem
+        // bei jedem neuen GPS-Fix auf die aktualisierte Position nachgeführt werden.
+        updateMeMarkerPosition();
+      }
+    } catch(e) {
+      gpsDebug.lastErr = { code: 'JS-Fehler (Karte/Kamera)', message: e.message, time: new Date().toLocaleTimeString('de-CH') };
+      renderGpsDebug();
+    }
+    // Läuft immer, auch wenn der Block oben fehlgeschlagen ist (siehe Kommentar dort).
+    try {
+      checkRouteProgress(heading);
+      checkForReroute();
+    } catch(e) {
+      gpsDebug.lastErr = { code: 'JS-Fehler (Distanz/Manöver)', message: e.message, time: new Date().toLocaleTimeString('de-CH') };
+      renderGpsDebug();
+    }
+  }
+  function onPosError(err){
+    setSpeedDisplay(hasGpsFix ? '--' : 'GPS?', false);
+    gpsDebug.errCount++;
+    if (err) {
+      const codes = { 1: 'PERMISSION_DENIED', 2: 'POSITION_UNAVAILABLE', 3: 'TIMEOUT' };
+      gpsDebug.lastErr = { code: codes[err.code] || err.code, message: err.message || '', time: new Date().toLocaleTimeString('de-CH') };
+    }
+    renderGpsDebug();
+  }
+
+  // ---------- Map ----------
+  // ---------- Kartendrehung in Fahrtrichtung ----------
+  // MapLibre dreht die Vektorkarte nativ per Kamera (bearing) — Strassenbeschriftung
+  // bleibt dabei automatisch lesbar (kein eingebrannter Text wie bei Rasterkacheln,
+  // kein CSS-Trick, kein Wechsel des Kartenstils mehr nötig). Die Kürzeste-Weg-Logik
+  // beim Überschreiten von 0°/360° übernimmt MapLibre intern selbst.
+  const NAV_PITCH = 50; // Kippwinkel (°) — nur während aktiver, gedrehter Navigation; manuelles Tilten per Geste bleibt deaktiviert (touchPitch:false)
+
+  // Wird ausschliesslich zum Zurücksetzen aufgerufen (immer mit 0) — daher hier auch pitch mit auf 0
+  function applyMapRotation(headingDeg){
+    if (!map) return;
+    const deg = (typeof headingDeg === 'number' && !isNaN(headingDeg)) ? headingDeg : 0;
+    map.easeTo({ bearing: deg, pitch: 0, duration: 400 });
+  }
+
+  function setBuildingsVisible(show){
+    buildingsVisible = show;
+    buildingLayerIds.forEach(id => {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', show ? 'visible' : 'none');
+    });
+  }
+
+  // Bewusst KEIN maplibregl.Marker (dessen Position folgt beim Pinch-Zoom der Kamera-Projektion und
+  // "wandert" dadurch sichtbar — frühere Korrekturversuche per map.setCenter() störten MapLibres
+  // Touch-Handler, siehe CHANGELOG 3.6.2–3.6.4). Stattdessen: im Folgemodus hart per CSS auf
+  // Bildschirmmitte gepinnt, unabhängig von der Kamera-Projektion.
+  function updateMeMarkerPosition(){
+    if (!map || !meMarker || !lastPos) return;
+    // !mapOverviewActive: siehe onPosition() weiter oben — während der Routen-Übersicht (nicht
+    // auf den Standort zentriert) darf der Punkt nicht auf Bildschirmmitte gepinnt werden (3.9.6).
+    const following = (isNavigating || rotateEnabled) && !map.__userMoved && !mapOverviewActive;
+    let x, y;
+    if (following) {
+      const mapEl = map.getContainer();
+      x = mapEl.clientWidth / 2;
+      y = mapEl.clientHeight / 2;
+    } else {
+      const pt = map.project([lastPos.lon, lastPos.lat]);
+      x = pt.x; y = pt.y;
+    }
+    meMarker.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+  }
+
+  function initMap(){
+    map = new maplibregl.Map({
+      container: 'map',
+      style: 'https://tiles.openfreemap.org/styles/liberty', // kostenlos, kein API-Key (openfreemap.org)
+      center: [8.5417, 47.3769], // MapLibre: [lng, lat] — anders als Leaflets [lat, lng]!
+      zoom: 14,
+      attributionControl: false, // manuell unten links platziert (siehe unten) — sonst Kollision mit dem Start-Button unten rechts
+      dragRotate: false, pitchWithRotate: false, touchPitch: false, // nur Pan+Zoom per Geste, wie zuvor bei Leaflet — Drehung/Kippung läuft programmatisch per Fahrtrichtung
+      // pixelRatio begrenzen: Default ist devicePixelRatio (auf aktuellen iPhones meist 3), die
+      // WebGL-Karte würde also mit bis zu 9x mehr Pixeln rendern als bei 1x nötig — besonders
+      // teuer kombiniert mit der 50°-Kippung/3D-Gebäuden während der Navigation. 2x bleibt auf
+      // Retina-Displays noch sichtbar scharf, halbiert bis drittelt aber die Fragment-Shader-Last
+      // gegenüber 3x/4x-Geräten spürbar.
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      // Keine wiederholten Welt-Kopien rendern/verwalten lassen — die App zeigt ohnehin nie einen
+      // rausgezoomten Weltüberblick (immer Navigations-/Stadt-Zoomstufen), erspart MapLibre daher
+      // ausnahmslos unnötige Arbeit, ganz ohne sichtbaren Unterschied.
+      renderWorldCopies: false
+    });
+    map.touchZoomRotate.disableRotation();
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    // 3.9.12: Der Liberty-Style referenziert für gewisse POI-Kategorien (Sport-/Freizeitplätze wie
+    // "climbing", "beachvolleyball", "running") Icon-Namen, die im aktuell ausgelieferten Sprite-Atlas
+    // fehlen — rein eine Lücke im extern gehosteten Kartenstil, nicht in dieser App. Funktional folgenlos
+    // (der betroffene POI-Punkt erscheint einfach ohne Icon), MapLibre loggt aber bei jedem fehlenden
+    // Namen eine eigene Konsolen-Warnung. `styleimagemissing` liefert für jeden fehlenden Namen einmalig
+    // ein 1×1-transparentes Platzhalterbild nach — beendet die Warnung dauerhaft, ohne jede sichtbare
+    // oder performance-relevante Auswirkung (kein Netzwerk-Call, kein wiederholtes Neuzeichnen).
+    map.on('styleimagemissing', e => {
+      if (map.hasImage(e.id)) return;
+      map.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) });
+    });
+    map.on('load', () => {
+      mapStyleLoaded = true;
+      try {
+        // "building" ist der Standard-Source-Layer-Name im OpenMapTiles-Schema (OpenFreeMap Liberty) —
+        // robuster als feste Layer-IDs, falls der Stil intern mehrere Gebäude-Layer nutzt (z.B. 3D + Umriss)
+        buildingLayerIds = map.getStyle().layers
+          .filter(l => l['source-layer'] === 'building' || /building/i.test(l.id))
+          .map(l => l.id);
+        setBuildingsVisible(buildingsVisible);
+        // Alle "tunnel_*"-Layer sammeln (Liberty-Stil-Konvention, siehe Kommentar bei tunnelLayerIds
+        // weiter oben) — robuster als eine feste Liste, falls der Stil sie mal umbenennt/erweitert.
+        // ABER (3.9.8): "tunnel_*" umfasst im Liberty-Stil nicht nur befahrbare Strassen, sondern
+        // auch tunnel_rail, tunnel_path/pedestrian, tunnel_transit_pier, tunnel_aerialway etc. Quert
+        // man z.B. auf einer Strasse/Brücke einen darunterliegenden Bahn- oder Fusswegtunnel, matchte
+        // das bisher fälschlich als eigene Tunneldurchfahrt (kurzes Dimmen beim Queren). Ausschluss
+        // dieser Nicht-Strassen-Layer per Namensmuster — die eigentliche Filterung gegen "quere ich
+        // nur" statt "fahre ich hindurch" macht zusätzlich TUNNEL_ALIGN_MAX_DEG in checkTunnel().
+        const TUNNEL_LAYER_EXCLUDE_RE = /rail|path|pedestrian|transit|aerialway|ferry|steps|cycleway|footway|pier/i;
+        tunnelLayerIds = map.getStyle().layers
+          .filter(l => l.id.startsWith('tunnel_') && !TUNNEL_LAYER_EXCLUDE_RE.test(l.id))
+          .map(l => l.id);
+      } catch (e) { /* Style-Layer-Liste ausnahmsweise noch nicht bereit */ }
+    });
+
+    const meMarkerEl = document.createElement('div');
+    meMarkerEl.className = 'me-marker-icon';
+    meMarkerEl.innerHTML = '<div class="me-marker-fan"></div><div class="me-marker-dot"></div>'
+      + '<div class="me-marker-car"><svg viewBox="0 0 24 24"><path d="M12 1.5 L20 21 L12 16.5 L4 21 Z" fill="#2196f3" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg></div>';
+    // Bewusst KEIN maplibregl.Marker mehr (siehe updateMeMarkerPosition weiter unten) — der Punkt
+    // wird stattdessen als normales, absolut positioniertes DOM-Element direkt im Karten-Container
+    // verwaltet, damit er im Folgemodus unabhängig von MapLibres eigener Zoom/Pan-Projektion
+    // bildschirmfix in der Mitte gehalten werden kann.
+    meMarkerEl.style.cssText = 'position:absolute; left:0; top:0; z-index:5; pointer-events:none; opacity:0; will-change:transform;';
+    map.getContainer().appendChild(meMarkerEl);
+    meMarker = meMarkerEl;
+
+    map.on('move', updateMeMarkerPosition); // deckt Pan/Zoom/Rotate/Pitch ab, inkl. laufender Gesten und aller easeTo/jumpTo-Animationen
+
+    function leaveFollowMode(){
+      map.__userMoved = true;
+      // Nur zurücksetzen, wenn nötig, und per jumpTo (sofort) statt easeTo — sonst konkurriert
+      // eine unnötige Animation mit dem laufenden Drag und die Karte stockt beim Verschieben
+      if (map.getBearing() !== 0 || map.getPitch() !== 0) {
+        map.jumpTo({ bearing: 0, pitch: 0 });
+      }
+      if (isNavigating) {
+        el('route-start').classList.remove('following');
+        el('route-start').textContent = '◎';
+        el('route-start').title = 'Zentrieren';
+      }
+    }
+
+    // Bei echtem Pinch landen/lösen sich die Finger nie im exakt selben Event — MapLibre feuert dabei
+    // teils kurz 'dragstart', was den Folgemodus fälschlich beenden würde. Beide Reihenfolgen
+    // (dragstart vor/nach dem zoom) werden über dieses Toleranzfenster abgefangen.
+    const GESTURE_GRACE_MS = 250;
+    let dragLeaveTimer = null;
+    let lastZoomEventAt = 0;
+    function onUserGestureStart(e){
+      if (!e.originalEvent) return; // nur bei echter Nutzer-Geste (Maus/Touch) — nicht bei unseren eigenen easeTo()/jumpTo()-Aufrufen
+      if (e.type !== 'dragstart') { leaveFollowMode(); return; }
+      if (performance.now() - lastZoomEventAt < GESTURE_GRACE_MS) return; // kurz zuvor gezoomt -> Rest-Impuls derselben Pinch-Geste
+      clearTimeout(dragLeaveTimer);
+      dragLeaveTimer = setTimeout(leaveFollowMode, GESTURE_GRACE_MS);
+    }
+    map.on('zoom', () => {
+      // bestätigt: war Pinch-Zoom, kein Verschieben — Follow-Abbruch verwerfen
+      lastZoomEventAt = performance.now();
+      clearTimeout(dragLeaveTimer);
+    });
+    // Kein map.setCenter() im zoom-Event mehr (der Standort-Punkt hält sich seit 3.6.4 selbst per CSS
+    // auf Bildschirmmitte, s.o.). Bewusst OHNE 'zoomstart': das würde Folgen/Rotation/Tilt bei jedem
+    // Zoom-Tap zurückwerfen, obwohl der Nutzer nur die Zoomstufe ändern wollte. Siehe CHANGELOG 3.4.1.
+    ['dragstart', 'rotatestart', 'pitchstart'].forEach(evt => map.on(evt, onUserGestureStart));
+  }
+
+  el('map-toggle').addEventListener('click', () => {
+    el('map-wrap').classList.toggle('expanded');
+    setTimeout(() => { map.resize(); }, 260);
+  });
+
+  // ---------- Traffic (TomTom, optional API key) — verwaltet über ⚙ Einstellungen ----------
+  let trafficLayer = null, incidentMarkers = [], trafficOn = false, incidentTimer = null;
+  let trafficTileRefreshTimer = null; // referenziert, damit disableTraffic() ihn stoppen kann (sonst Leak bei wiederholtem Ein/Aus)
+  let lastIncidentFetch = 0;
+  const INCIDENT_MIN_GAP_MS = 45000; // nie öfter als alle 45s abfragen, egal wie oft die Karte sich bewegt
+  const TT_KEY_STORAGE = 'fahrspur_tomtom_key';
+
+  function getTomTomKey(){ return localStorage.getItem(TT_KEY_STORAGE) || ''; }
+
+  const TRAFFIC_SRC_ID = 'traffic-flow';
+
+  function enableTraffic(key){
+    let tBucket = Math.floor(Date.now() / 180000);
+    const trafficUrl = () => `https://api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.png?key=${key}&t=${tBucket}`;
+    const addTrafficLayer = () => {
+      map.addSource(TRAFFIC_SRC_ID, { type: 'raster', tiles: [trafficUrl()], tileSize: 256 });
+      // vor der Routen-Linie einfügen, falls die schon existiert — sonst würde der Traffic-Layer
+      // (später hinzugefügt) die Route optisch teilweise verdecken (MapLibre stapelt strikt nach
+      // Hinzufüge-Reihenfolge, anders als Leaflets automatische Overlay-über-Kacheln-Panes)
+      map.addLayer(
+        { id: TRAFFIC_SRC_ID, type: 'raster', source: TRAFFIC_SRC_ID, paint: { 'raster-opacity': 0.85 } },
+        map.getLayer(ROUTE_SRC_ID) ? ROUTE_SRC_ID : undefined
+      );
+      trafficLayer = true;
+    };
+    if (mapStyleLoaded) addTrafficLayer(); else map.once('load', addTrafficLayer);
+    // Kachel-Cache-Buster: alle 3 Minuten neu anfragen statt auf alten Browser-Cache zu vertrauen.
+    // Falls schon einer läuft (z.B. schnelles Aus-/wieder-Einschalten), zuerst stoppen, damit nie
+    // zwei parallele Cache-Buster-Intervalle gleichzeitig existieren.
+    if (trafficTileRefreshTimer) clearInterval(trafficTileRefreshTimer);
+    trafficTileRefreshTimer = setInterval(() => {
+      const nb = Math.floor(Date.now() / 180000);
+      if (nb !== tBucket && trafficLayer && map.getSource(TRAFFIC_SRC_ID)) {
+        tBucket = nb;
+        map.getSource(TRAFFIC_SRC_ID).setTiles([trafficUrl()]);
+      }
+    }, 15000);
+    trafficOn = true;
+    refreshIncidents(true);
+    incidentTimer = setInterval(() => refreshIncidents(true), 45000);
+    map.on('moveend', onMoveEndRefresh);
+  }
+
+  function onMoveEndRefresh(){ refreshIncidents(false); }
+
+  function disableTraffic(){
+    if (trafficLayer) {
+      if (map.getLayer(TRAFFIC_SRC_ID)) map.removeLayer(TRAFFIC_SRC_ID);
+      if (map.getSource(TRAFFIC_SRC_ID)) map.removeSource(TRAFFIC_SRC_ID);
+      trafficLayer = null;
+    }
+    incidentMarkers.forEach(m => m.remove());
+    incidentMarkers = [];
+    trafficOn = false;
+    clearInterval(incidentTimer);
+    clearInterval(trafficTileRefreshTimer);
+    trafficTileRefreshTimer = null;
+    map.off('moveend', onMoveEndRefresh);
+  }
+
+  async function refreshIncidents(force){
+    if (!trafficOn) return;
+    const now = Date.now();
+    if (!force && (now - lastIncidentFetch) < INCIDENT_MIN_GAP_MS) return;
+    lastIncidentFetch = now;
+    const key = getTomTomKey();
+    const b = map.getBounds();
+    const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+    const fields = '{incidents{type,geometry{type,coordinates},properties{iconCategory,magnitudeOfDelay,events{description}}}}';
+    const url = `https://api.tomtom.com/traffic/services/5/incidentDetails?key=${key}&bbox=${bbox}&fields=${encodeURIComponent(fields)}&language=de-DE`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return; // z.B. ungültiger Key oder Kontingent erreicht
+      const data = await res.json();
+      incidentMarkers.forEach(m => m.remove());
+      incidentMarkers = [];
+      (data.incidents || []).forEach(inc => {
+        const coords = inc.geometry && inc.geometry.coordinates;
+        if (!coords) return;
+        const point = inc.geometry.type === 'Point' ? coords : coords[Math.floor(coords.length / 2)];
+        const desc = (inc.properties.events && inc.properties.events[0] && inc.properties.events[0].description) || 'Verkehrsstörung';
+        const sevWords = ['Unbekannt','Gering','Mäßig','Erheblich','Stau'];
+        const sev = sevWords[inc.properties.magnitudeOfDelay] || 'Meldung';
+        const el = document.createElement('div');
+        el.className = 'incident-marker';
+        const popup = new maplibregl.Popup({ offset: 8 })
+          .setHTML(`<div class="incident-popup"><span class="sev">${sev}</span>${desc}</div>`);
+        const marker = new maplibregl.Marker({ element: el })
+          .setLngLat([point[0], point[1]])
+          .setPopup(popup)
+          .addTo(map);
+        incidentMarkers.push(marker);
+      });
+    } catch (e) { /* still, Verbindung evtl. offline */ }
+  }
+
+  // ---------- Routing (Nominatim geocode + OSRM route) ----------
+  el('dest-go').addEventListener('click', planRoute);
+
+  el('swap-start-dest').addEventListener('click', () => {
+    const startVal = el('start-input').value;
+    const destVal = el('dest-input').value;
+    el('start-input').value = destVal;
+    el('dest-input').value = startVal;
+
+    const tmp = startResolved.coord;
+    startResolved.coord = destResolved.coord;
+    destResolved.coord = tmp;
+  });
+  el('dest-input').addEventListener('keydown', e => { if (e.key === 'Enter') planRoute(); });
+  el('start-input').addEventListener('keydown', e => { if (e.key === 'Enter') planRoute(); });
+
+  // ---------- Autocomplete (Nominatim) ----------
+  const startResolved = { coord: null };
+  const destResolved = { coord: null };
+
+  function setupAutocomplete(inputId, listId, resolvedStore){
+    const input = el(inputId), list = el(listId);
+    let debounceTimer = null, controller = null;
+
+    input.addEventListener('input', () => {
+      resolvedStore.coord = null;
+      clearTimeout(debounceTimer);
+      const q = input.value.trim();
+      if (q.length < 3 || parseCoordInput(q)) { list.innerHTML = ''; list.classList.remove('show'); return; }
+      debounceTimer = setTimeout(() => fetchSuggestions(q), 400);
+    });
+    input.addEventListener('focus', () => { if (list.children.length) list.classList.add('show'); });
+    input.addEventListener('blur', () => setTimeout(() => list.classList.remove('show'), 200));
+
+    async function fetchSuggestions(q){
+      if (controller) controller.abort();
+      controller = new AbortController();
+      try {
+        const res = await fetch(
+          'https://nominatim.openstreetmap.org/search?format=json&limit=5&q=' + encodeURIComponent(q),
+          { signal: controller.signal }
+        );
+        const data = await res.json();
+        renderSuggestions(data);
+      } catch (e) { /* abgebrochen oder offline — ignorieren */ }
+    }
+
+    function renderSuggestions(data){
+      list.innerHTML = '';
+      if (!data.length) { list.classList.remove('show'); return; }
+      data.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'suggest-item';
+        row.textContent = item.display_name;
+        row.addEventListener('mousedown', e => e.preventDefault()); // Blur vor Klick verhindern
+        row.addEventListener('click', () => {
+          input.value = item.display_name;
+          resolvedStore.coord = { lat: parseFloat(item.lat), lon: parseFloat(item.lon) };
+          list.classList.remove('show');
+        });
+        list.appendChild(row);
+      });
+      list.classList.add('show');
+    }
+  }
+
+  setupAutocomplete('start-input', 'start-suggest', startResolved);
+  setupAutocomplete('dest-input', 'dest-suggest', destResolved);
+
+  async function resolveField(text, resolvedStore){
+    if (resolvedStore.coord) return resolvedStore.coord;
+    return await resolvePoint(text);
+  }
+
+  function parseCoordInput(q){
+    // Erkennt "lat, lon" oder "lat lon" (Dezimalgrad, mit optionalem Vorzeichen)
+    const m = q.match(/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
+    if (!m) return null;
+    const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+    if (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return { lat, lon };
+  }
+
+  async function resolvePoint(q){
+    const coord = parseCoordInput(q);
+    if (coord) return coord;
+    const res = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
+    const data = await res.json();
+    if (!data.length) return null;
+    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  }
+
+  let currentDestination = null; // fürs automatische Neu-Routen gemerkt
+  let routeCoordsFlat = null;    // [[lat,lon], ...] fürs Abweichungs-Prüfen
+  let routeCumulativeDist = null; // parallel dazu: Meter vom Start bis zu jedem Punkt
+  let offRouteStreak = 0;
+  let lastRerouteCheck = 0;
+  const REROUTE_DISTANCE_M = 60;
+  const REROUTE_MIN_GAP_MS = 12000;
+  // Fährt man normal weiter, verschiebt sich die nächstgelegene Stelle auf der Route nur
+  // langsam vorwärts — checkForReroute() muss daher nicht mehr die GESAMTE Route absuchen,
+  // sondern nur ein Fenster um die zuletzt gefundene Position. Bei jeder neuen/neuberechneten
+  // Route (computeRoute) wird der Index zurückgesetzt.
+  let rerouteSearchIndex = 0;
+  const REROUTE_SEARCH_BACK = 30;
+  const REROUTE_SEARCH_FWD = 120;
+
+  // OSRM erzeugt oft kurze, nicht-navigierbare Zwischenschritte ("new name"/"continue" bei jedem
+  // Strassennamenwechsel ohne echte Kreuzung) — werden hier in den vorherigen Schritt eingeschmolzen
+  // (Distanz/Dauer/Geometrie summiert), damit das Banner nicht ständig kontextlos "Geradeaus weiter"
+  // anzeigt (siehe CHANGELOG 3.9.3). Schritte mit echter Richtungsentscheidung bleiben immer eigene
+  // Schritte, unabhängig von ihrer Länge.
+  const MERGE_STRAIGHT_MAX_M = 20;
+  const MERGEABLE_TYPES = new Set(['new name', 'continue', 'notification']);
+  function mergeTrivialStraightSteps(rawSteps){
+    const merged = [];
+    for (let i = 0; i < rawSteps.length; i++) {
+      const s = rawSteps[i];
+      const m = s.maneuver.modifier;
+      const mergeable = i > 0 && i < rawSteps.length - 1 && merged.length > 0
+        && MERGEABLE_TYPES.has(s.maneuver.type) && (!m || m === 'straight')
+        && s.distance < MERGE_STRAIGHT_MAX_M;
+      if (mergeable) {
+        const prev = merged[merged.length - 1];
+        prev.distance += s.distance;
+        prev.duration += s.duration;
+        // Geometrie mitverschmelzen (3.9.9), sonst deckt prev.geometry nach dem Merge nicht mehr
+        // die volle prev.distance ab — wichtig für die neue Restdistanz-Berechnung entlang der
+        // eigenen Step-Geometrie (siehe distAlongStepRemaining()), die sonst schon ein Stück vor
+        // dem tatsächlichen Manöverpunkt bei 0 ankäme.
+        if (prev.geometry && s.geometry && prev.geometry.coordinates && s.geometry.coordinates) {
+          const prevCoords = prev.geometry.coordinates;
+          const addCoords = s.geometry.coordinates;
+          // Erster Punkt von s ist i.d.R. identisch mit dem letzten von prev — nicht doppelt anhängen
+          const startIdx = (addCoords.length && prevCoords.length
+            && addCoords[0][0] === prevCoords[prevCoords.length - 1][0]
+            && addCoords[0][1] === prevCoords[prevCoords.length - 1][1]) ? 1 : 0;
+          prev.geometry = { type: 'LineString', coordinates: prevCoords.concat(addCoords.slice(startIdx)) };
+        }
+      } else {
+        merged.push(s);
+      }
+    }
+    return merged;
+  }
+
+  async function computeRoute(startCoord, destCoord, opts){
+    opts = opts || {};
+    const url = `https://router.project-osrm.org/route/v1/driving/${startCoord.lon},${startCoord.lat};${destCoord.lon},${destCoord.lat}?overview=full&geometries=geojson&steps=true`;
+    const routeRes = await fetch(url);
+    const routeData = await routeRes.json();
+    if (!routeData.routes || !routeData.routes.length) return false;
+
+    const route = routeData.routes[0];
+    drawRoute(route); // Einpassen der Ansicht (fitRouteOverview) macht der Aufrufer selbst,
+                       // erst NACHDEM alle betroffenen HUD-Panels ihre finale Sichtbarkeit haben
+    routeSteps = mergeTrivialStraightSteps(route.legs[0].steps);
+    nextStepIndex = 0;
+    announcedStepIndex = -1;
+    reachedManeuverPoint = false;
+    rebuildGeomForCurrentSegment();
+    // Rückwärts durchlaufen und je Step die Summe von Distanz/Dauer ALLER folgenden Steps
+    // vorberechnen — updateRouteEtaDist() greift danach nur noch lesend darauf zu
+    stepRemainingDistAfter = new Array(routeSteps.length);
+    stepRemainingDurationAfter = new Array(routeSteps.length);
+    {
+      let accDist = 0, accDuration = 0;
+      for (let i = routeSteps.length - 1; i >= 0; i--) {
+        stepRemainingDistAfter[i] = accDist;
+        stepRemainingDurationAfter[i] = accDuration;
+        accDist += routeSteps[i].distance;
+        accDuration += routeSteps[i].duration;
+      }
+    }
+    routeCoordsFlat = route.geometry.coordinates.map(c => ({ lat: c[1], lon: c[0] }));
+    routeCumulativeDist = [0];
+    for (let i = 1; i < routeCoordsFlat.length; i++) {
+      routeCumulativeDist.push(routeCumulativeDist[i - 1] + distMeters(routeCoordsFlat[i - 1], routeCoordsFlat[i]));
+    }
+    offRouteStreak = 0;
+    rerouteSearchIndex = 0; // neue/neu berechnete Route → Suchfenster wieder am Anfang beginnen
+    updateSimButtonState();
+
+    el('route-summary').classList.add('show');
+    el('eta-val').textContent = new Date(Date.now() + route.duration * 1000)
+      .toLocaleTimeString('de-CH', { hour:'2-digit', minute:'2-digit' });
+    el('dist-val').textContent = (route.distance / 1000).toFixed(1) + ' km';
+    return true;
+  }
+
+  async function planRoute(){
+    const q = el('dest-input').value.trim();
+    const startQ = el('start-input').value.trim();
+    if (!q) return;
+    if (!startQ && !lastPos) { el('turn-text').textContent = 'Kein GPS-Standort verfügbar — Start manuell eingeben.'; el('turn-banner').classList.add('show'); return; }
+    el('turn-text').textContent = 'Suche Ziel...';
+    el('turn-banner').classList.add('show');
+    try {
+      const dest = await resolveField(q, destResolved);
+      if (!dest) { el('turn-text').textContent = 'Ziel nicht gefunden.'; return; }
+
+      let start = lastPos;
+      if (startQ) {
+        el('turn-text').textContent = 'Suche Start...';
+        const resolvedStart = await resolveField(startQ, startResolved);
+        if (!resolvedStart) { el('turn-text').textContent = 'Startort nicht gefunden.'; return; }
+        start = resolvedStart;
+      }
+
+      const ok = await computeRoute(start, dest);
+      if (!ok) { el('turn-text').textContent = 'Keine Route gefunden.'; return; }
+      currentDestination = dest;
+      el('turn-banner').classList.remove('show'); // Manöver erst bei echtem Navigationsstart zeigen, nicht schon bei der Planung
+
+      map.__userMoved = false;
+      isNavigating = false;
+      el('route-start').classList.add('show');
+      el('route-start').classList.remove('following');
+      el('route-start').textContent = '▶';
+      el('route-start').title = 'Navigation starten';
+      el('search-fields').classList.add('hidden');
+      // Erst jetzt einpassen: route-summary/route-start sind jetzt sichtbar, search-fields
+      // versteckt — computeRouteOverviewPadding() misst also die tatsächliche, finale Belegung
+      fitRouteOverview();
+    } catch (e) {
+      el('turn-text').textContent = 'Routing fehlgeschlagen (Verbindung prüfen).';
+    }
+  }
+
+  async function checkForReroute(){
+    if (!isNavigating || !lastPos || !routeCoordsFlat || !currentDestination) return;
+    const now = Date.now();
+    if (now - lastRerouteCheck < REROUTE_MIN_GAP_MS) return;
+    lastRerouteCheck = now;
+
+    // Nur ein Fenster um die zuletzt gefundene Segment-Position absuchen statt der gesamten
+    // Route (kann bei langen Routen tausende Punkte haben) — bei normaler Fahrt reicht das,
+    // da sich die nächstgelegene Stelle nur schrittweise nach vorne verschiebt
+    const searchFrom = Math.max(0, rerouteSearchIndex - REROUTE_SEARCH_BACK);
+    const searchTo = Math.min(routeCoordsFlat.length - 1, rerouteSearchIndex + REROUTE_SEARCH_FWD);
+    let minDist = Infinity;
+    for (let i = searchFrom; i < searchTo; i++) {
+      const d = distToSegmentMeters(lastPos, routeCoordsFlat[i], routeCoordsFlat[i + 1]);
+      if (d < minDist) { minDist = d; rerouteSearchIndex = i; }
+    }
+
+    if (minDist > REROUTE_DISTANCE_M) {
+      offRouteStreak++;
+      if (offRouteStreak >= 2) {
+        offRouteStreak = 0;
+        el('turn-text').textContent = 'Verfahren — Route wird neu berechnet…';
+        el('turn-banner').classList.add('show');
+        speak('Route wird neu berechnet');
+        const ok = await computeRoute(lastPos, currentDestination, { silent: true });
+        if (!ok) el('turn-text').textContent = 'Neuberechnung fehlgeschlagen.';
+      }
+    } else {
+      offRouteStreak = 0;
+    }
+  }
+
+  // Abstand eines Punkts zu einer Strecke (a–b), in Metern — von checkForReroute() genutzt
+  function distToSegmentMeters(p, a, b){
+    const toXY = pt => ({ x: pt.lon * Math.cos(p.lat * Math.PI / 180), y: pt.lat });
+    const P = toXY(p), A = toXY(a), B = toXY(b);
+    const dx = B.x - A.x, dy = B.y - A.y;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 === 0 ? 0 : ((P.x - A.x) * dx + (P.y - A.y) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const closest = { lat: A.y + t * dy, lon: (A.x + t * dx) / Math.cos(p.lat * Math.PI / 180) };
+    return distMeters(p, closest);
+  }
+
+  const ROUTE_SRC_ID = 'route-line';
+  let lastRouteCoords = null; // für fitRouteOverview() nach dem Layout-Update gemerkt
+
+  function drawRoute(route){
+    const data = { type: 'Feature', geometry: route.geometry, properties: {} };
+    const applyData = () => {
+      if (map.getSource(ROUTE_SRC_ID)) {
+        map.getSource(ROUTE_SRC_ID).setData(data);
+      } else {
+        map.addSource(ROUTE_SRC_ID, { type: 'geojson', data });
+        map.addLayer({
+          id: ROUTE_SRC_ID, type: 'line', source: ROUTE_SRC_ID,
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: { 'line-color': '#2196f3', 'line-width': 5, 'line-opacity': .85 }
+        });
+      }
+      routeLine = true;
+    };
+    if (mapStyleLoaded) applyData(); else map.once('load', applyData);
+    lastRouteCoords = route.geometry.coordinates;
+  }
+
+  // Liest die tatsächlich sichtbaren Ränder (BoundingClientRect) der HUD-Panels, die über der
+  // Karte liegen, und übersetzt sie in fitBounds-Padding — statt eines pauschalen Werts, der
+  // z.B. das route-summary-Panel unten oder die Icon-Leiste oben ignoriert und die Route dort
+  // verdeckt. Muss aufgerufen werden, NACHDEM alle betroffenen Panels ihren finalen
+  // Sichtbarkeitszustand erreicht haben (also erst nach dem Umschalten von .show/.hidden).
+  function computeRouteOverviewPadding(){
+    const mapRect = map.getContainer().getBoundingClientRect();
+    const MARGIN = 24;
+    const rectOf = id => {
+      const elm = el(id);
+      if (!elm) return null;
+      const r = elm.getBoundingClientRect();
+      return (r.width === 0 && r.height === 0) ? null : r; // display:none o.ä. → nicht sichtbar
+    };
+
+    const topRect = rectOf('hud-top');
+    let padTop = MARGIN;
+    if (topRect) padTop = Math.max(MARGIN, topRect.bottom - mapRect.top + 10);
+
+    let padBottom = MARGIN;
+    ['route-summary', 'search-fields', 'route-start'].forEach(id => {
+      const r = rectOf(id);
+      if (!r) return;
+      const overlap = mapRect.bottom - r.top;
+      if (overlap > 0) padBottom = Math.max(padBottom, overlap + 10);
+    });
+
+    // Sicherheitsnetz: bei kleiner Karte (z.B. eingeklapptes Insel-Fenster) dürfen sich
+    // oben+unten nicht überlappen — sonst würde fitBounds mit negativer Restfläche rechnen
+    const maxCombinedV = Math.max(40, mapRect.height - 60);
+    if (padTop + padBottom > maxCombinedV) {
+      const scale = maxCombinedV / (padTop + padBottom);
+      padTop *= scale; padBottom *= scale;
+    }
+    return { top: padTop, bottom: padBottom, left: MARGIN, right: MARGIN };
+  }
+
+  function fitRouteOverview(){
+    if (!lastRouteCoords || !map) return;
+    // Zeigt bewusst die GANZE Strecke, NICHT den eigenen Standort zentriert. mapOverviewActive
+    // unterdrückt Folgemodus-Kamera und Marker-Pinning währenddessen (siehe CHANGELOG 3.9.6), bis
+    // die Navigation tatsächlich startet (routeStartBtn) oder die Route gelöscht wird.
+    mapOverviewActive = true;
+    const coords = lastRouteCoords;
+    const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+    // bearing/pitch explizit auf 0 zwingen: fitBounds rechnet sonst mit der aktuell noch
+    // geneigten/gedrehten Kamera (Rest von einer vorherigen Navigation) und die Strecke
+    // passt dann nicht zuverlässig vollständig ins Bild
+    map.fitBounds(bounds, { padding: computeRouteOverviewPadding(), bearing: 0, pitch: 0 });
+  }
+
+  function removeRouteLine(){
+    if (map.getLayer(ROUTE_SRC_ID)) map.removeLayer(ROUTE_SRC_ID);
+    if (map.getSource(ROUTE_SRC_ID)) map.removeSource(ROUTE_SRC_ID);
+    routeLine = null;
+  }
+
+  // Exakter Abgleich mit OSRM's modifier-Werten statt nur .includes('left'/'right') — sonst sehen
+  // sanfte Bögen/Verzweigungen (fork) im Banner wie scharfe Kurven aus (CHANGELOG 3.9.1). Gleiche
+  // Icons wie renderLaneGuidance()/LANE_ICONS, für optische Konsistenz.
+  function maneuverIcon(type, modifier){
+    if (type === 'arrive') return '🏁';
+    if (type === 'depart') return '↑';
+    if (type === 'roundabout' || type === 'rotary' || type === 'exit roundabout' || type === 'exit rotary') return '⟳';
+    const m = modifier || '';
+    if (m === 'sharp left') return '↺';
+    if (m === 'slight left') return '↖';
+    if (m === 'left') return '↰';
+    if (m === 'sharp right') return '↻';
+    if (m === 'slight right') return '↗';
+    if (m === 'right') return '↱';
+    if (m === 'uturn') return '↶';
+    return '↑'; // "straight" sowie Typen ohne gerichteten modifier
+  }
+
+  // Schlüssel mit LEERZEICHEN ("slight left"), nicht Unterstrich — muss exakt OSRM's
+  // lane.indications-Schreibweise matchen, sonst landet alles im '↑'-Fallback (Bugfix 4.1.0).
+  const LANE_ICONS = {
+    straight: '↑', left: '↰', right: '↱',
+    'slight left': '↖', 'slight right': '↗',
+    'sharp left': '↺', 'sharp right': '↻', uturn: '↶'
+  };
+
+  // Kombi-Symbole für Spuren mit mehreren erlaubten Richtungen (OSRM liefert ein ganzes
+  // indications-Array pro Spur, z.B. ["left","straight"] — nur indications[0] auszuwerten liess die
+  // zweite Richtung untergehen, Bugfix 4.1.0). Unbekannte Kombinationen fallen auf aneinandergereihte
+  // Einzelsymbole zurück statt Information zu verlieren.
+  const LANE_COMBO_ICONS = {
+    'left+straight': '⇖',
+    'right+straight': '⇗'
+  };
+  function laneIconFor(indications){
+    const dirs = (indications || []).filter(d => d && d !== 'none');
+    if (!dirs.length) return LANE_ICONS.straight;
+    if (dirs.length === 1) return LANE_ICONS[dirs[0]] || LANE_ICONS.straight;
+    const key = dirs.slice().sort().join('+');
+    if (LANE_COMBO_ICONS[key]) return LANE_COMBO_ICONS[key];
+    return dirs.map(d => LANE_ICONS[d] || '').join(''); // Fallback: einzelne Symbole aneinandergereiht
+  }
+
+  // Wertet NUR intersections[0] aus (= der eigene Manöverpunkt dieses Schritts, dieselbe Konvention
+  // wie rebuildGeomForCurrentSegment() weiter unten) — sonst können Spurdaten einer SPÄTEREN Kreuzung
+  // fälschlich angezeigt werden (Bugfix 4.0.0). Bewusst NICHT auf "nur einen Pfeil" reduziert: mehrere
+  // von OSRM als `valid` markierte Spuren sind tatsächlich gleichwertige Optionen — siehe README für
+  // die Begründung. gpsDebug.lastLanes ist reine Diagnose fürs Debug-HUD (4.2.0). Ergebnis wird gecacht
+  // (laneGuidanceHTML) und erst nah an der Verzweigung eingeblendet, siehe updateLaneGuidanceVisibility
+  // (4.3.0, CHANGELOG für den ursprünglich gemeldeten Fall).
+  let laneGuidanceHTML = null;
+  function renderLaneGuidance(step){
+    const intersections = step && step.intersections;
+    const first = intersections && intersections[0];
+    const lanes = (first && first.lanes && first.lanes.length) ? first.lanes : null;
+    if (!lanes) {
+      laneGuidanceHTML = null;
+      gpsDebug.lastLanes = null;
+      return;
+    }
+    laneGuidanceHTML = lanes.map(lane => {
+      const icon = laneIconFor(lane.indications);
+      return `<span class="lane-icon${lane.valid ? ' valid' : ''}">${icon}</span>`;
+    }).join('');
+    gpsDebug.lastLanes = {
+      name: (step && step.name) || '(ohne Namen)',
+      ref: (step && step.ref) || '(ohne Ref)',
+      count: lanes.length,
+      indications: lanes.map(l => '[' + ((l.indications || []).join(',') || '?') + (l.valid ? '*' : '') + ']').join(' ')
+    };
+  }
+
+  // Ab dieser Distanz zur Verzweigung wird die Spuranzeige eingeblendet — grob an dem orientiert, wo auf
+  // Schweizer Autobahnen die ersten Spur-Signalisationstafeln stehen (deutlich früher als der eigentliche
+  // Abbiege-Countdown/-Sprachansage, damit noch genug Zeit zum Spurwechsel bleibt, aber ohne bei fernen
+  // Verzweigungen unnötig anzuzeigen, welche Spur erst in Kilometern relevant wird).
+  const LANE_GUIDANCE_MAX_DIST_M = 1000;
+  function updateLaneGuidanceVisibility(distanceM){
+    const box = el('lane-guidance');
+    if (!laneGuidanceHTML || typeof distanceM !== 'number' || distanceM > LANE_GUIDANCE_MAX_DIST_M) {
+      box.classList.remove('show');
+      return;
+    }
+    if (box.innerHTML !== laneGuidanceHTML) box.innerHTML = laneGuidanceHTML;
+    box.classList.add('show');
+  }
+
+  // 4.4.0: siehe Kommentar bei isGentleManeuver()/turnBannerReal weiter unten bei showStep() — deckt
+  // die tatsächliche Instruktion auf, sobald die Verzweigung nah genug ist. Bleibt danach so (kein
+  // Zurückspringen zur Vereinfachung nötig, solange man sich derselben Verzweigung nähert).
+  function updateTurnBannerDirection(distanceM){
+    if (!turnBannerReal) return;
+    if (typeof distanceM === 'number' && distanceM <= LANE_GUIDANCE_MAX_DIST_M) {
+      el('turn-icon').textContent = turnBannerReal.icon;
+      el('turn-text').textContent = turnBannerReal.text;
+      turnBannerReal = null;
+    }
+  }
+
+  // Autobahn-Referenz erkennen, um das Badge grün (wie CH/DE-Autobahnsignalisation) statt
+  // generisch blau einzufärben — Schweizer/deutsche Autobahn-Refs starten mit "A" + Zahl (A1, A13, …).
+  const MOTORWAY_REF_RE = /^A\s*\d/i;
+
+  // Nur "sanfte" Manöver (Fork/slight left/slight right) werden bis LANE_GUIDANCE_MAX_DIST_M vor der
+  // Verzweigung als "Geradeaus weiter" vereinfacht (turnBannerReal cacht die echte Instruktion, siehe
+  // updateTurnBannerDirection) — eine echte Abbiegung kündigt dagegen von Anfang an ihre tatsächliche
+  // Richtung an, da sie eine wirkliche Lenkbewegung ist. CHANGELOG 4.4.0.
+  function isGentleManeuver(man){
+    return man.type === 'fork' || man.modifier === 'slight left' || man.modifier === 'slight right';
+  }
+  let turnBannerReal = null; // { icon, text } — tatsächliche Instruktion, solange noch vereinfacht angezeigt wird
+
+  function showStep(i){
+    const step = routeSteps[i];
+    if (!step) return;
+    const realIcon = maneuverIcon(step.maneuver.type, step.maneuver.modifier);
+
+    // Strassennummer (ref) als eigenes Badge, unabhängig vom Strassennamen — OSRM liefert bei
+    // benannten Autobahnabschnitten oft BEIDES (z.B. name:"Gubristtunnel", ref:"A1"). Der Badge
+    // ersetzt in diesem Fall die Nennung im Fliesstext (kein doppeltes "A1 ... auf A1" mehr,
+    // siehe 3.7.1) — steht stattdessen direkt HINTER dem Verb-Text ("Links abbiegen auf [A1]").
+    const refEl = el('turn-ref');
+    const showRef = step.ref && showRoadRef;
+    if (showRef) {
+      refEl.textContent = step.ref;
+      refEl.classList.add('show');
+      refEl.classList.toggle('motorway', MOTORWAY_REF_RE.test(step.ref));
+    } else {
+      refEl.classList.remove('show');
+    }
+
+    // Bewusst KEIN Strassenname mehr im Fliesstext (siehe 3.9.0) — nur noch die knappe
+    // Abbiege-Anweisung, plus Strassen-BEZEICHNUNG (Referenz, z.B. "A1") wenn vorhanden. Der
+    // eigentliche Name ("Gubristtunnel", "Bahnhofstrasse") ist für die schnelle Erfassung während
+    // der Fahrt nicht relevant und wurde entfernt, um die Anzeige auf das Wesentliche zu reduzieren.
+    const realText = showRef
+      ? `${verbFor(step.maneuver)} auf`
+      : (step.ref ? `${verbFor(step.maneuver)} auf ${step.ref}` : verbFor(step.maneuver)); // Referenz vorhanden, aber Badge in den Einstellungen ausgeblendet
+
+    if (isGentleManeuver(step.maneuver)) {
+      const simpleText = showRef ? 'Geradeaus weiter auf' : (step.ref ? `Geradeaus weiter auf ${step.ref}` : 'Geradeaus weiter');
+      turnBannerReal = { icon: realIcon, text: realText };
+      el('turn-icon').textContent = '↑';
+      el('turn-text').textContent = simpleText;
+    } else {
+      turnBannerReal = null;
+      el('turn-icon').textContent = realIcon;
+      el('turn-text').textContent = realText;
+    }
+    el('turn-dist').textContent = formatDistance(step.distance);
+
+    // Ausfahrtsnummer (exits) + Fahrtziel-Beschilderung (destinations, z.B. "Bern, Zürich") —
+    // beides von OSRM nur befüllt, wenn in den zugrunde liegenden OSM-Daten vorhanden (v.a. bei
+    // Autobahnausfahrten/-verzweigungen), sonst bleibt die Zeile ausgeblendet.
+    const destEl = el('turn-destinations');
+    const destParts = [];
+    if (showDestinations) {
+      if (step.exits) destParts.push(`Ausfahrt ${step.exits}`);
+      if (step.destinations) destParts.push(step.destinations.replace(/;/g, ', '));
+    }
+    if (destParts.length) {
+      destEl.textContent = destParts.join(' · ');
+      destEl.classList.add('show');
+    } else {
+      destEl.classList.remove('show');
+    }
+
+    // 4.3.0: Sichtbarkeit NICHT hier fest anhand step.distance setzen (das wäre wegen der schrittinternen
+    // OSRM-Indexierung ohnehin die falsche Distanz, siehe rebuildGeomForCurrentSegment()) — sie wird beim
+    // nächsten GPS-/Sim-Tick in checkRouteProgress() anhand der echten Live-Distanz aktualisiert.
+    if (showLaneGuidance) { renderLaneGuidance(step); } else { laneGuidanceHTML = null; el('lane-guidance').classList.remove('show'); }
+    el('turn-banner').classList.add('show');
+  }
+
+  function formatDistance(meters){
+    if (meters >= 1000) return (meters / 1000).toFixed(1) + ' km';
+    return Math.round(meters) + ' m';
+  }
+
+  // Gleicher Grund wie bei maneuverIcon() oben: "abbiegen" für einen sanften Bogen (slight
+  // left/right) oder eine Autobahn-Verzweigung (fork) klingt schärfer als das, was auf der Karte
+  // tatsächlich zu sehen ist ("halten"/"einfädeln" passt besser). Zusätzlich jetzt auch die OSRM-
+  // Manövertypen fork/on ramp/off ramp/merge/roundabout berücksichtigt, statt sie ausschliesslich
+  // über den modifier zu erraten.
+  function verbFor(man){
+    const t = man.type, m = man.modifier || '';
+    if (t === 'arrive') return 'Ziel erreicht';
+    if (t === 'depart') return 'Los geht’s';
+    if (t === 'roundabout' || t === 'rotary') return 'In den Kreisel einfahren';
+    if (t === 'exit roundabout' || t === 'exit rotary') return 'Kreisel verlassen';
+    if (t === 'fork') {
+      if (m.includes('left')) return 'Links halten';
+      if (m.includes('right')) return 'Rechts halten';
+      return 'Der Verzweigung folgen';
+    }
+    if (t === 'on ramp') return 'Auf die Auffahrt wechseln';
+    if (t === 'off ramp') return 'Ausfahrt nehmen';
+    if (t === 'merge') return m.includes('left') ? 'Links einfädeln' : m.includes('right') ? 'Rechts einfädeln' : 'Einfädeln';
+    if (m === 'sharp left') return 'Scharf links abbiegen';
+    if (m === 'slight left') return 'Leicht links halten';
+    if (m === 'left') return 'Links abbiegen';
+    if (m === 'sharp right') return 'Scharf rechts abbiegen';
+    if (m === 'slight right') return 'Leicht rechts halten';
+    if (m === 'right') return 'Rechts abbiegen';
+    if (m === 'straight') return 'Geradeaus weiter';
+    if (m === 'uturn') return 'Wenden';
+    return 'Weiterfahren';
+  }
+
+  function distMeters(a, b){
+    const R = 6371000, toRad = d => d * Math.PI / 180;
+    const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+    const s = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  // Siehe checkRouteProgress(): Sprachansage-Vorwarnzeit, Schwelle für "nah genug dran", und
+  // Toleranz/Mindest-Winkel für den Richtungs-Abgleich.
+  const ANNOUNCE_DIST_M = 40, ARRIVE_DIST_M = 15;
+  const HEADING_TOLERANCE_DEG = 40; // wie nah das aktuelle Heading an bearing_after liegen muss
+  const MIN_BEARING_DELTA_DEG = 30; // ab welcher Kursänderung ein Manöver überhaupt "abbiegt"
+  // Notbremse (3.9.7): War der Manöverpunkt einmal erreicht, aber das Heading kommt nie in
+  // HEADING_TOLERANCE_DEG (z.B. weil GPS-Heading kurz aussetzt oder sich sehr langsam dreht),
+  // gilt das Manöver spätestens ab dieser Distanz zum Manöverpunkt trotzdem als abgeschlossen —
+  // sonst bleibt der Banner für den Rest der Fahrt hängen (genau das v3.9.6-Problem).
+  const STALL_FALLBACK_DIST_M = 45;
+
+  // Kürzeste Winkeldifferenz zwischen zwei Kompassrichtungen (0–180°), robust gegen den 0°/360°-Sprung.
+  function angleDiffDeg(a, b){
+    return Math.abs(((a - b + 540) % 360) - 180);
+  }
+
+  // Restdistanz entlang der EIGENEN Geometrie des aktuellen Schritts statt Luftlinie: eine Luftlinie
+  // zum Manöverpunkt ist auf Schleifen/Kleeblattrampen NICHT monoton fallend (kann zwischenzeitlich
+  // wieder steigen — CHANGELOG 3.9.9). Bewusst nur die Geometrie DES AKTUELLEN Schritts (nicht der
+  // ganzen Route wie im gescheiterten 3.9.5-Versuch) — keine Kreuzungs-Mehrdeutigkeit, und die Suche
+  // bleibt auf einen einzelnen Schritt begrenzt statt auf die gesamte Route. Wird bei jedem
+  // Schrittwechsel einmalig neu aufgebaut (buildCurrentStepGeom()), nicht bei jedem GPS-Tick.
+  let currentStepGeomPts = null, currentStepGeomCum = null, currentStepGeomTotal = 0;
+  // 3.9.11: letzter (kumulierter) Fortschritt entlang der aktuellen Schritt-Geometrie — siehe
+  // distAlongStepRemaining() für den Grund, warum das jetzt gebraucht wird.
+  let lastStepGeomCum = 0;
+  function buildCurrentStepGeom(step){
+    const coords = step && step.geometry && step.geometry.coordinates;
+    if (!coords || coords.length < 2) { currentStepGeomPts = null; return; } // Fallback: siehe distAlongStepRemaining()
+    currentStepGeomPts = coords.map(c => ({ lat: c[1], lon: c[0] }));
+    currentStepGeomCum = [0];
+    for (let i = 1; i < currentStepGeomPts.length; i++){
+      currentStepGeomCum.push(currentStepGeomCum[i - 1] + distMeters(currentStepGeomPts[i - 1], currentStepGeomPts[i]));
+    }
+    currentStepGeomTotal = currentStepGeomCum[currentStepGeomCum.length - 1];
+    lastStepGeomCum = 0; // 3.9.11: bei jedem neuen Schritt zurücksetzen
+  }
+  // WICHTIGE KONVENTION (siehe README "Fallstricke" — Ursache eines echten Bugs in 4.5.0, wenn
+  // missachtet): routeSteps[nextStepIndex] ist der KOMMENDE, noch nicht erreichte Schritt (seine
+  // .geometry beginnt erst AM anstehenden Manöverpunkt). Die Strecke, auf der man JETZT tatsächlich
+  // fährt, ist routeSteps[nextStepIndex - 1] — deren Geometrie endet exakt an diesem Manöverpunkt.
+  // Wer "aktuelle Strasse/Position" braucht, muss also nextStepIndex - 1 verwenden, nicht
+  // nextStepIndex (Bugfix 3.9.15, Details siehe CHANGELOG).
+  function rebuildGeomForCurrentSegment(){
+    buildCurrentStepGeom(nextStepIndex > 0 ? routeSteps[nextStepIndex - 1] : null);
+  }
+  // Liefert null, wenn für den aktuellen Schritt (ausnahmsweise) keine Geometrie vorliegt — checkRouteProgress()
+  // fällt dann auf die alte Luftlinie zurück, statt ganz ohne Distanzanzeige dazustehen.
+  function distAlongStepRemaining(pos){
+    if (!currentStepGeomPts || currentStepGeomPts.length < 2) return null;
+    let minDist = Infinity, bestCum = 0;
+    const toXY = pt => ({ x: pt.lon * Math.cos(pos.lat * Math.PI / 180), y: pt.lat });
+    const P = toXY(pos);
+    for (let i = 0; i < currentStepGeomPts.length - 1; i++){
+      const a = currentStepGeomPts[i], b = currentStepGeomPts[i + 1];
+      const A = toXY(a), B = toXY(b);
+      const dx = B.x - A.x, dy = B.y - A.y;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 === 0 ? 0 : ((P.x - A.x) * dx + (P.y - A.y) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const closest = { lat: A.y + t * dy, lon: (A.x + t * dx) / Math.cos(pos.lat * Math.PI / 180) };
+      const d = distMeters(pos, closest);
+      if (d < minDist) {
+        minDist = d;
+        bestCum = currentStepGeomCum[i] + t * (currentStepGeomCum[i + 1] - currentStepGeomCum[i]);
+      }
+    }
+    // Fortschritt darf pro Schritt nie sinken (gleiches Prinzip wie rerouteSearchIndex/simCursorIndex):
+    // die reine Nächste-Punkt-Suche kann auf langen/S-kurvigen Geometrien sonst kurzzeitig auf einen
+    // früheren Punkt zurückspringen, obwohl man weiterfährt (Bugfix 3.9.11, siehe CHANGELOG).
+    bestCum = Math.max(bestCum, lastStepGeomCum);
+    lastStepGeomCum = bestCum;
+    return Math.max(0, currentStepGeomTotal - bestCum);
+  }
+
+  // Ein Manöver gilt erst als abgeschlossen, wenn (1) die Luftlinie zum Manöverpunkt ARRIVE_DIST_M
+  // unterschreitet UND (2), bei Manövern mit echter Richtungsänderung, das aktuelle Heading nah genug
+  // an bearing_after liegt — reine Distanz allein kann an Kreuzungen zu früh "kippen" (Anfahrts-/
+  // Abfahrtsstrasse liegen oft nur wenige Meter auseinander). depart-Manöver verlangen nie einen
+  // Heading-Abgleich (bearing_before ist dort nicht aussagekräftig), "nah genug dran gewesen" wird
+  // pro Schritt gelatcht (reachedManeuverPoint) statt pro Tick neu verlangt, und STALL_FALLBACK_DIST_M
+  // ist die Notbremse, falls das Heading nie in Toleranz kommt. Diese Kombination ist das Ergebnis
+  // mehrerer gescheiterter einfacherer Ansätze — siehe CHANGELOG 3.9.2–3.9.7 für die Historie, falls
+  // hier mal wieder etwas geändert werden soll. checkForReroute() (separat, alle 12s) bleibt für
+  // echtes Verfahren zuständig.
+  function checkRouteProgress(headingDeg){
+    // isNavigating-Guard nötig: ohne ihn zeigt das Banner bereits bei geplanter (nicht gestarteter)
+    // Route ein Manöver, da der erste Wegpunkt direkt am eigenen Standort liegt.
+    if (!isNavigating || !routeSteps.length || !lastPos || nextStepIndex >= routeSteps.length) return;
+    const step = routeSteps[nextStepIndex];
+    const loc = step.maneuver.location; // [lon, lat]
+    // Ankunft/Notbremse laufen bewusst auf der Luftlinie (luft), nicht auf der geklemmten
+    // Geometrie-Distanz (die kann nach Erreichen des Endpunkts nicht mehr wachsen und liesse
+    // STALL_FALLBACK_DIST_M nie greifen — Bugfix 3.9.10, CHANGELOG für Details). Die Geometrie-
+    // Distanz (alongStep) dient nur der ANZEIGE, und auch nur vor reachedManeuverPoint.
+    const luft = distMeters(lastPos, { lat: loc[1], lon: loc[0] });
+    const alongStep = reachedManeuverPoint ? null : distAlongStepRemaining(lastPos);
+    const d = (alongStep !== null) ? alongStep : luft;
+    el('turn-dist').textContent = formatDistance(d);
+    updateRouteEtaDist(d);
+    if (showLaneGuidance) updateLaneGuidanceVisibility(d); // 4.3.0: nur nah an der Verzweigung einblenden
+    updateTurnBannerDirection(d); // 4.4.0: bei sanften Manövern (Fork/leicht links/rechts) ebenso erst nah an der Verzweigung die tatsächliche Richtung zeigen
+
+    // Sprachansage mit Vorwarnzeit — pro Schritt nur einmal.
+    if (nextStepIndex !== announcedStepIndex && d < ANNOUNCE_DIST_M) {
+      speak(verbFor(step.maneuver) + (step.name || step.ref ? ' auf ' + (step.name || step.ref) : '') + (step.exits && showDestinations ? ', Ausfahrt ' + step.exits : ''));
+      announcedStepIndex = nextStepIndex;
+    }
+
+    if (luft <= ARRIVE_DIST_M) reachedManeuverPoint = true;
+    if (!reachedManeuverPoint) return;
+
+    const needsHeadingCheck = step.maneuver.type !== 'depart'
+      && typeof headingDeg === 'number'
+      && typeof step.maneuver.bearing_before === 'number' && typeof step.maneuver.bearing_after === 'number'
+      && angleDiffDeg(step.maneuver.bearing_before, step.maneuver.bearing_after) > MIN_BEARING_DELTA_DEG;
+
+    let arrived = !needsHeadingCheck || angleDiffDeg(headingDeg, step.maneuver.bearing_after) <= HEADING_TOLERANCE_DEG;
+    if (!arrived && luft >= STALL_FALLBACK_DIST_M) arrived = true; // Notbremse, siehe oben
+
+    if (arrived) {
+      nextStepIndex++;
+      announcedStepIndex = -1;
+      reachedManeuverPoint = false;
+      if (nextStepIndex < routeSteps.length) {
+        rebuildGeomForCurrentSegment();
+        showStep(nextStepIndex);
+      }
+      else {
+        el('turn-text').textContent = 'Ziel erreicht';
+        el('turn-icon').textContent = '🏁';
+      }
+    }
+  }
+
+  // Restdistanz/-zeit live aus verbleibenden Schritten berechnen (nicht nur bei Neuberechnung).
+  // Summiert seit 3.2.1 NICHT mehr bei jedem Aufruf alle restlichen Steps auf — greift nur noch
+  // auf die in computeRoute() einmalig vorberechneten stepRemainingDistAfter/-DurationAfter zu.
+  function updateRouteEtaDist(distToNextManeuver){
+    if (!routeSteps.length || nextStepIndex >= routeSteps.length) return;
+    const curStep = routeSteps[nextStepIndex];
+    const remainingDist = distToNextManeuver + stepRemainingDistAfter[nextStepIndex];
+    const remainingDuration = (curStep.distance > 0
+      ? (distToNextManeuver / curStep.distance) * curStep.duration
+      : 0) + stepRemainingDurationAfter[nextStepIndex];
+    el('eta-val').textContent = new Date(Date.now() + remainingDuration * 1000)
+      .toLocaleTimeString('de-CH', { hour:'2-digit', minute:'2-digit' });
+    el('dist-val').textContent = (remainingDist / 1000).toFixed(1) + ' km';
+  }
+
+  function speak(text){
+    if (!('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'de-DE';
+    speechSynthesis.speak(u);
+  }
+
+  el('route-start').addEventListener('click', () => {
+    if (!lastPos) return;
+    isNavigating = true;
+    map.__userMoved = false;
+    mapOverviewActive = false; // Übersichts-Phase (fitRouteOverview) endet spätestens hier definitiv (3.9.6)
+    map.jumpTo({ center: [lastPos.lon, lastPos.lat], zoom: NAV_ZOOM });
+    el('route-start').classList.add('following');
+    el('route-start').textContent = '◎';
+    el('route-start').title = 'Folgt der Fahrt — antippen zum Zentrieren';
+    el('hud-top-right').classList.remove('expanded');
+    if (meMarker) meMarker.classList.add('as-car');
+    updateMeMarkerPosition();
+    rebuildGeomForCurrentSegment();
+    showStep(nextStepIndex);
+  });
+
+  el('route-clear').addEventListener('click', () => {
+    if (routeLine) removeRouteLine();
+    routeSteps = []; nextStepIndex = 0;
+    announcedStepIndex = -1;
+    reachedManeuverPoint = false;
+    stepRemainingDistAfter = []; stepRemainingDurationAfter = [];
+    currentStepGeomPts = null; currentStepGeomCum = null; currentStepGeomTotal = 0; lastStepGeomCum = 0; // 3.9.9/3.9.11
+    isNavigating = false;
+    mapOverviewActive = false;
+    currentDestination = null;
+    routeCoordsFlat = null;
+    routeCumulativeDist = null;
+    offRouteStreak = 0;
+    stopSimulation();
+    applyMapRotation(0);
+    smoothedHeading = null;
+    el('hud-top-right').classList.add('expanded');
+    if (meMarker) meMarker.classList.remove('as-car');
+    updateMeMarkerPosition();
+    el('route-summary').classList.remove('show');
+    el('route-start').classList.remove('show');
+    el('turn-banner').classList.remove('show');
+    el('turn-ref').classList.remove('show');
+    el('turn-destinations').classList.remove('show');
+    laneGuidanceHTML = null;
+    el('lane-guidance').classList.remove('show');
+    turnBannerReal = null;
+    el('dest-input').value = '';
+    el('start-input').value = '';
+    el('search-fields').classList.remove('hidden');
+  });
+
+  // ---------- Overlay drawing (burned-in HUD onto canvas for recording) ----------
+  let lastDrawTime = 0;
+  // Eine einzige Quelle für die Bildrate, die für Zeichnen UND Aufnahme gilt (vorher zeichnete
+  // drawLoop mit 24fps, aber captureStream() forderte 30fps an — inkonsistent, und die 30fps
+  // hätten den Vorteil der 24fps-Drosselung (siehe 3.1.1, behebt ruckliges Pinch-Zoom) teilweise
+  // wieder aufgehoben. 24fps beibehalten, damit die Zeichenlast nicht wieder steigt.
+  const CANVAS_FPS = 24;
+  const DRAW_INTERVAL_MS = 1000 / CANVAS_FPS;
+
+  // Datum/Uhrzeit-Formatierung (toLocaleDateString/toLocaleTimeString) ist auf Sekunden genau —
+  // Neuformatieren bei jedem Frame lieferte also ohnehin bis zu ~24x denselben String pro
+  // Sekunde. Jetzt nur noch neu formatiert, wenn sich die Sekunde tatsächlich geändert hat;
+  // sichtbar identisch, da die Anzeige vorher auch nie öfter als 1x/Sekunde wirklich wechselte.
+  let cachedStamp = '';
+  let cachedStampSecond = -1;
+  let cachedLineWidth = 0;
+  let cachedLineLenKey = '';
+
+  // startDrawLoop()/stopDrawLoop(): verhindert vor allem, dass durch einen doppelten Aufruf
+  // (z.B. Doppel-Tap auf "Zugriff erlauben" während die async Kamera-Anfrage noch läuft) zwei
+  // parallele, sich selbst am Leben haltende requestAnimationFrame-Loops entstehen, die den
+  // Canvas doppelt zeichnen würden — unnötige GPU-Last, die nie mehr von selbst aufhört
+  let drawLoopRunning = false;
+  function startDrawLoop(){
+    if (drawLoopRunning) return; // bereits aktiv — kein zweiter, paralleler Loop
+    drawLoopRunning = true;
+    requestAnimationFrame(drawLoop);
+  }
+  function stopDrawLoop(){
+    drawLoopRunning = false; // drawLoop() plant beim nächsten Durchlauf keinen weiteren Frame mehr ein
+  }
+
+  function drawLoop(timestamp){
+    if ((timestamp || 0) - lastDrawTime >= DRAW_INTERVAL_MS) {
+      lastDrawTime = timestamp || 0;
+      if (cameraEl.readyState >= 2) {
+        ctx.clearRect(0,0,canvas.width, canvas.height);
+        drawCover(ctx, cameraEl, canvas.width, canvas.height);
+
+        const pad = Math.round(canvas.width / 110);
+        const fontSize = Math.max(14, Math.round(canvas.width / 85));
+        ctx.font = `700 ${fontSize}px "Ubuntu", sans-serif`;
+        ctx.textBaseline = 'bottom';
+        const nowMs = Date.now();
+        const nowSecond = Math.floor(nowMs / 1000);
+        if (nowSecond !== cachedStampSecond) {
+          cachedStampSecond = nowSecond;
+          const now = new Date(nowMs);
+          cachedStamp = now.toLocaleDateString('de-CH') + '  ' + now.toLocaleTimeString('de-CH');
+        }
+        const coord = lastPos ? `${lastPos.lat.toFixed(5)}, ${lastPos.lon.toFixed(5)}` : '— kein GPS —';
+        const speedTxt = currentSpeedKmh !== null ? Math.round(currentSpeedKmh) + ' km/h' : '-- km/h';
+        const line = `${cachedStamp}   ${coord}   ${speedTxt}`;
+
+        // ctx.measureText() nicht mehr bei JEDEM Frame (24x/Sekunde), sondern nur noch, wenn sich
+        // Zeichenanzahl oder Schriftgrösse seit dem letzten Frame geändert haben — die Zeile ändert
+        // sich zwar inhaltlich fast jeden Frame (Sekunde, Koordinaten), ihre Länge in Zeichen aber
+        // nur selten (z.B. wenn die Geschwindigkeit von 9 auf 10 km/h springt). Der Hintergrund-Box
+        // kann dadurch für einen einzelnen Frame minimal daneben liegen (kein Monospace-Font),
+        // was optisch nicht auffällt, spart aber den Grossteil der Messaufrufe.
+        const lineLenKey = line.length + ':' + fontSize;
+        if (lineLenKey !== cachedLineLenKey) {
+          cachedLineLenKey = lineLenKey;
+          cachedLineWidth = ctx.measureText(line).width;
+        }
+        const boxH = fontSize + 12;
+        ctx.fillStyle = 'rgba(0,0,0,.45)';
+        ctx.fillRect(0, canvas.height - boxH - pad*0.4, cachedLineWidth + pad*2, boxH + 6);
+        ctx.fillStyle = '#2196f3';
+        ctx.fillText(line, pad, canvas.height - pad*0.6);
+      }
+    }
+    if (drawLoopRunning) requestAnimationFrame(drawLoop);
+  }
+
+  // ---------- Recording ----------
+  // Einzige Quelle der Wahrheit für Segmentlänge UND Anzahl behaltener Segmente — vorher wurden
+  // beide unabhängig voneinander gerundet, was das Loop-Fenster verfälschte (z.B. 5min-Auswahl ergab
+  // 6min Gesamtfenster). Keine Zwischenrundung mehr, nur die Timer-Millisekunden werden gerundet.
+  // Bugfix 3.8.2, siehe CHANGELOG.
+  const LOOP_SEGMENTS = 3;
+  // 4.3.0: Default von "Aus" auf "Letzte 5 Minuten" geändert (auf Wunsch, moderater Default statt
+  // unbegrenzt durchgehender Aufnahme) — weiterhin rein in-memory, keine localStorage-Persistenz.
+  let segmentTimer = null, continueAfterStop = false, loopMinutes = 5, segmentLengthMinutes = 5;
+  let clips = []; // { id, url, blob, name, time }
+
+  // Aufnahme-Widget in der Titelleiste: eingeklappt nur Punkt+Zeit,
+  // antippen zeigt die volle Ansicht (inkl. Clips- und Aufnahme-Knopf)
+  document.querySelector('#hud-top-middle .rec-chip').addEventListener('click', () => {
+    el('hud-top-middle').classList.toggle('expanded');
+  });
+
+  // Steuerelemente-Leiste rechts: eingeklappt zeigt nur Geschwindigkeit/Tempolimit,
+  // antippen zeigt Ansicht-/Einstellungs-Knöpfe wieder
+  el('speed-chip').addEventListener('click', () => {
+    el('hud-top-right').classList.toggle('expanded');
+  });
+
+  el('rec-btn-top').addEventListener('click', () => {
+    recording ? stopRecording() : startRecording();
+  });
+
+  function startSegmentRecorder(){
+    const canvasStream = canvas.captureStream(CANVAS_FPS); // vorher fest 30 — jetzt dieselbe Rate wie drawLoop (CANVAS_FPS)
+    let combined = canvasStream;
+    if (micEnabled && micStream) {
+      combined = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...micStream.getAudioTracks()
+      ]);
+    }
+    let options = (selectedFormat && selectedFormat.mime) ? { mimeType: selectedFormat.mime } : {};
+
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(combined, options);
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = handleSegmentStop;
+    mediaRecorder.start(1000);
+  }
+
+  function startRecording(){
+    continueAfterStop = false;
+    startSegmentRecorder();
+
+    recording = true;
+    recStartTime = Date.now();
+    el('rec-btn-top').classList.add('recording');
+    el('recDot').classList.add('live');
+    el('hud-top-middle').classList.remove('expanded'); // zurück zur kompakten Ansicht — mehr Platz für die Karte
+    timerInterval = setInterval(updateTimer, 500);
+
+    if (loopMinutes > 0) {
+      segmentLengthMinutes = loopMinutes / LOOP_SEGMENTS; // bewusst nicht gerundet, siehe Kommentar bei LOOP_SEGMENTS
+      segmentTimer = setInterval(() => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          continueAfterStop = true;
+          mediaRecorder.stop();
+        }
+      }, Math.round(segmentLengthMinutes * 60000));
+    }
+  }
+
+  function stopRecording(){
+    continueAfterStop = false;
+    clearInterval(segmentTimer);
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  }
+
+  function updateTimer(){
+    const s = Math.floor((Date.now() - recStartTime) / 1000);
+    const mm = String(Math.floor(s/60)).padStart(2,'0');
+    const ss = String(s%60).padStart(2,'0');
+    el('timer').textContent = `${mm}:${ss}`;
+  }
+
+  function updateClipsBadge(){
+    const badge = el('clips-count-badge');
+    if (!badge) return;
+    if (clips && clips.length) {
+      badge.textContent = clips.length;
+      badge.classList.add('show');
+    } else {
+      badge.classList.remove('show');
+    }
+  }
+
+  function handleSegmentStop(){
+    const ext = (selectedFormat && selectedFormat.ext) || 'webm';
+    const blob = new Blob(recordedChunks, { type: (selectedFormat && selectedFormat.mime) || 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    clipCounter++;
+    clips.push({
+      id: clipCounter,
+      url, blob,
+      name: `fahrspur-clip-${clipCounter}.${ext}`,
+      time: new Date().toLocaleTimeString('de-CH')
+    });
+
+    if (loopMinutes > 0) {
+      // LOOP_SEGMENTS direkt statt neu aus loopMinutes/segmentLengthMinutes zu berechnen — das war
+      // die zweite unabhängige Rundung, die zusammen mit der bei segmentLengthMinutes das
+      // Loop-Fenster verfälscht hat (siehe Kommentar bei LOOP_SEGMENTS)
+      while (clips.length > LOOP_SEGMENTS) {
+        const old = clips.shift();
+        URL.revokeObjectURL(old.url);
+      }
+    }
+    renderClipsList();
+    updateClipsBadge();
+
+    if (continueAfterStop) {
+      continueAfterStop = false;
+      startSegmentRecorder();
+    } else {
+      recording = false;
+      el('rec-btn-top').classList.remove('recording');
+      el('recDot').classList.remove('live');
+      clearInterval(timerInterval);
+      clearInterval(segmentTimer);
+      el('timer').textContent = '00:00';
+    }
+  }
+
+  function renderClipsList(){
+    const list = el('clips-list');
+    list.innerHTML = '';
+    for (let i = clips.length - 1; i >= 0; i--) {
+      const c = clips[i];
+      const row = document.createElement('div');
+      row.className = 'clip-row';
+      row.innerHTML = `
+        <div class="clip-meta">
+          <div class="clip-name">${c.name}</div>
+          <div class="clip-time">${c.time} · ${(c.blob.size/1024/1024).toFixed(1)} MB</div>
+        </div>
+        <a class="clip-dl" href="${c.url}" download="${c.name}">Speichern</a>
+      `;
+      list.appendChild(row);
+    }
+  }
+
+  // ---------- Clips sheet ----------
+  el('clips-btn').addEventListener('click', () => el('clips-sheet').classList.add('show'));
+
+  // ---------- View swap (Kamera ↔ Karte) ----------
+  el('swap-btn').addEventListener('click', () => {
+    document.body.classList.toggle('swap-view');
+    // Vor dem Tausch: "Versteckt"-Zustand komplett zurücksetzen, damit nicht eine
+    // alte Ausblendung (vom jeweils anderen Modus) fälschlich hängen bleibt
+    [el('map-wrap'), cameraEl.parentElement, canvas].forEach(t => t && t.classList.remove('inset-hidden'));
+    el('inset-toggle-btn').classList.remove('on');
+    setTimeout(() => {
+      if (map) map.resize();
+      const targets = getInsetTargets();
+      // Aktuelle Eck-Position auf das neue Inset übertragen
+      targets.forEach(t => {
+        if (!t) return;
+        INSET_POSITIONS.forEach(p => t.classList.remove(p));
+        if (INSET_POSITIONS[insetPosIndex] !== 'pos-br') t.classList.add(INSET_POSITIONS[insetPosIndex]);
+      });
+    }, 260);
+  });
+
+  // ---------- Inset panel: einfach ein-/ausblenden ----------
+  const mapWrapEl = el('map-wrap');
+
+  function getInsetTargets(){
+    return document.body.classList.contains('swap-view') ? [cameraEl.parentElement, canvas] : [mapWrapEl];
+  }
+
+  el('inset-toggle-btn').addEventListener('click', () => {
+    const hidden = getInsetTargets()[0].classList.contains('inset-hidden');
+    getInsetTargets().forEach(t => t && t.classList.toggle('inset-hidden', !hidden));
+    el('inset-toggle-btn').classList.toggle('on', !hidden);
+    if (hidden && map) map.resize();
+  });
+
+  const INSET_POSITIONS = ['pos-br', 'pos-bl', 'pos-tr', 'pos-tl'];
+  let insetPosIndex = 0;
+
+  el('inset-pos-btn').addEventListener('click', () => {
+    insetPosIndex = (insetPosIndex + 1) % INSET_POSITIONS.length;
+    getInsetTargets().forEach(t => {
+      if (!t) return;
+      INSET_POSITIONS.forEach(p => t.classList.remove(p));
+      if (INSET_POSITIONS[insetPosIndex] !== 'pos-br') t.classList.add(INSET_POSITIONS[insetPosIndex]);
+    });
+  });
+
+  function syncRotateToggleBtn(){
+    el('rotate-toggle-btn').classList.toggle('on', rotateEnabled);
+  }
+  syncRotateToggleBtn();
+  el('rotate-toggle-btn').addEventListener('click', () => {
+    rotateEnabled = !rotateEnabled;
+    localStorage.setItem('fahrspur_rotate_enabled', rotateEnabled ? '1' : '0');
+    if (!rotateEnabled) {
+      applyMapRotation(0);
+    } else if (map) {
+      // Direkt wieder "Folgen" aktivieren, falls die Karte zuvor (z.B. durch Verschieben) aus
+      // dem Folgemodus rausgefallen war — sonst hätte das Einschalten hier keine Wirkung, ohne
+      // aktive Route gibt es keinen separaten "Folgen"-Button zum Zurücksetzen
+      map.__userMoved = false;
+      // Sofort zentrieren statt auf den nächsten GPS-Tick zu warten (kann sonst je nach
+      // Update-Rate 1-8s dauern) — spürbar direktes Feedback auf den Klick
+      if (lastPos) map.jumpTo({ center: [lastPos.lon, lastPos.lat] });
+    }
+    syncRotateToggleBtn();
+  });
+
+  // ---------- Camera & recording settings ----------
+  function debugTick(){ renderGpsDebug(); }
+
+  // Sofort reagieren, sobald die Checkbox umgeschaltet wird — nicht erst nach "Übernehmen"
+  el('settings-debug-enable').addEventListener('change', () => {
+    debugEnabled = el('settings-debug-enable').checked;
+    localStorage.setItem('fahrspur_debug_enabled', debugEnabled ? '1' : '0');
+    el('debug-hud').classList.toggle('cs-hidden', !debugEnabled);
+    if (debugEnabled) {
+      debugTick();
+      clearInterval(gpsDebugTimer);
+      gpsDebugTimer = setInterval(debugTick, 1000);
+    } else {
+      clearInterval(gpsDebugTimer);
+      // stopSimulation() hier bewusst NICHT mehr aufgerufen (siehe 3.8.0) — eine laufende
+      // Simulation soll weiterlaufen, auch wenn das Debug-HUD währenddessen ausgeschaltet wird.
+      updateSimButtonState();
+    }
+  });
+
+  el('settings-btn').addEventListener('click', async () => {
+    await populateCameraSelect();
+    populateFormatSelect();
+    // Aktuelle Werte vorauswählen
+    const resSelect = el('resolution-select');
+    for (const opt of resSelect.options) {
+      if (RES_PRESETS[opt.value] === recRes) { resSelect.value = opt.value; break; }
+    }
+    el('loop-select').value = String(loopMinutes);
+    el('settings-traffic-key').value = getTomTomKey();
+    el('settings-traffic-enable').checked = trafficOn;
+    el('settings-mic-enable').checked = micEnabled;
+    el('settings-debug-enable').checked = debugEnabled;
+    el('debug-hud').classList.toggle('cs-hidden', !debugEnabled);
+    el('settings-buildings-enable').checked = buildingsVisible;
+    el('settings-tilt-enable').checked = tiltEnabled;
+    el('settings-turnref-enable').checked = showRoadRef;
+    el('settings-turndest-enable').checked = showDestinations;
+    el('settings-lanes-enable').checked = showLaneGuidance;
+    el('settings-tunnel-enable').checked = tunnelModeEnabled;
+    if (debugEnabled) {
+      debugTick();
+      if (gpsDebugTimer) clearInterval(gpsDebugTimer);
+      gpsDebugTimer = setInterval(debugTick, 1000);
+    }
+    el('camera-settings-sheet').classList.add('show');
+  });
+  el('camera-settings-cancel').addEventListener('click', () => {
+    el('camera-settings-sheet').classList.remove('show');
+    clearInterval(gpsDebugTimer);
+  });
+
+  async function populateCameraSelect(){
+    const select = el('camera-select');
+    select.innerHTML = '';
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      cams.forEach((cam, i) => {
+        const opt = document.createElement('option');
+        opt.value = cam.deviceId;
+        opt.textContent = cam.label || `Kamera ${i + 1}`;
+        if (cam.deviceId === currentDeviceId) opt.selected = true;
+        select.appendChild(opt);
+      });
+      if (!cams.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Standardkamera';
+        select.appendChild(opt);
+      }
+    } catch(e) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Standardkamera';
+      select.appendChild(opt);
+    }
+  }
+
+  function populateFormatSelect(){
+    const select = el('format-select');
+    select.innerHTML = '';
+    const formats = detectSupportedFormats();
+    formats.forEach((f, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = f.label;
+      if (selectedFormat && f.mime === selectedFormat.mime) opt.selected = true;
+      select.appendChild(opt);
+    });
+    select.__formats = formats;
+  }
+
+  el('camera-settings-apply').addEventListener('click', async () => {
+    const camSelect = el('camera-select');
+    const resSelect = el('resolution-select');
+    const formatSelect = el('format-select');
+    const loopSelect = el('loop-select');
+
+    const deviceId = camSelect.value || null;
+    const preset = RES_PRESETS[resSelect.value] || RES_PRESETS['1080p'];
+    const formats = formatSelect.__formats || detectSupportedFormats();
+    const format = formats[parseInt(formatSelect.value, 10)] || formats[0];
+    const newLoopMinutes = parseInt(loopSelect.value, 10) || 0;
+    micEnabled = el('settings-mic-enable').checked;
+
+    debugEnabled = el('settings-debug-enable').checked;
+    localStorage.setItem('fahrspur_debug_enabled', debugEnabled ? '1' : '0');
+    el('debug-hud').classList.toggle('cs-hidden', !debugEnabled);
+    if (debugEnabled) { debugTick(); } else { clearInterval(gpsDebugTimer); updateSimButtonState(); } // Simulation läuft unabhängig weiter, siehe 3.8.0
+
+
+    if (map) setBuildingsVisible(el('settings-buildings-enable').checked);
+    localStorage.setItem('fahrspur_buildings_visible', el('settings-buildings-enable').checked ? '1' : '0');
+
+    tiltEnabled = el('settings-tilt-enable').checked;
+    localStorage.setItem('fahrspur_tilt_enabled', tiltEnabled ? '1' : '0');
+    if (!tiltEnabled && map && (map.getPitch() !== 0)) applyMapRotation(map.getBearing()); // sofort flach, Drehung bleibt wie sie ist
+
+    showRoadRef = el('settings-turnref-enable').checked;
+    localStorage.setItem('fahrspur_turnbanner_ref', showRoadRef ? '1' : '0');
+    showDestinations = el('settings-turndest-enable').checked;
+    localStorage.setItem('fahrspur_turnbanner_dest', showDestinations ? '1' : '0');
+    showLaneGuidance = el('settings-lanes-enable').checked;
+    localStorage.setItem('fahrspur_turnbanner_lanes', showLaneGuidance ? '1' : '0');
+    // Sofort auf ein evtl. gerade sichtbares Manöver anwenden, nicht erst beim nächsten Schritt
+    if (isNavigating && routeSteps[nextStepIndex]) showStep(nextStepIndex);
+
+    tunnelModeEnabled = el('settings-tunnel-enable').checked;
+    localStorage.setItem('fahrspur_tunnel_mode', tunnelModeEnabled ? '1' : '0');
+    if (!tunnelModeEnabled && inTunnel) { inTunnel = false; document.body.classList.remove('tunnel-mode'); }
+
+    el('camera-settings-apply').textContent = 'Wird angewendet...';
+    try {
+      await openCamera(deviceId, preset);
+      currentDeviceId = deviceId;
+      recRes = preset;
+      selectedFormat = format;
+      loopMinutes = newLoopMinutes;
+      fitCanvas();
+
+      if (recording) {
+        clearInterval(segmentTimer);
+        if (loopMinutes > 0) {
+          segmentLengthMinutes = loopMinutes / LOOP_SEGMENTS; // bewusst nicht gerundet, siehe Kommentar bei LOOP_SEGMENTS
+          segmentTimer = setInterval(() => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+              continueAfterStop = true;
+              mediaRecorder.stop();
+            }
+          }, Math.round(segmentLengthMinutes * 60000));
+        }
+      }
+
+      const newTrafficKey = el('settings-traffic-key').value.trim();
+      const trafficWanted = el('settings-traffic-enable').checked;
+      if (newTrafficKey) localStorage.setItem(TT_KEY_STORAGE, newTrafficKey);
+      if (trafficWanted && !trafficOn) {
+        const key = getTomTomKey();
+        if (key) enableTraffic(key);
+      } else if (!trafficWanted && trafficOn) {
+        disableTraffic();
+      } else if (trafficWanted && trafficOn && newTrafficKey) {
+        // Key wurde geändert, während Verkehr schon aktiv war: neu starten
+        disableTraffic();
+        enableTraffic(newTrafficKey);
+      }
+
+      el('camera-settings-sheet').classList.remove('show');
+      clearInterval(gpsDebugTimer);
+    } catch(e) {
+      alert('Kamera konnte nicht gewechselt werden: ' + e.message);
+    }
+    el('camera-settings-apply').textContent = 'Übernehmen';
+  });
+  el('close-clips').addEventListener('click', () => el('clips-sheet').classList.remove('show'));
+
+  // Keep screen awake while page is open (best effort)
+  let wakeLock = null;
+  async function requestWakeLock(){
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') requestWakeLock();
+  });
+
+})();
+</script>
+</body>
+</html>
