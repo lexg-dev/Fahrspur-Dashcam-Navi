@@ -9,6 +9,7 @@ Selbstgebautes Single-Page-HTML-Tool für iPhone, das Dashcam-Aufnahme und OpenS
 - **Navigation**: Routing über OSRM, Kartendarstellung über MapLibre GL JS (WebGL-Vektorkacheln) mit dem kostenlosen [OpenFreeMap](https://openfreemap.org/) "Liberty"-Style.
 - **Verkehr (optional)**: TomTom Traffic Flow (Rasterkacheln) + Incidents, erfordert eigenen TomTom-API-Key.
 - **Tempolimit-Anzeige**: über die Overpass-API (OpenStreetMap) anhand der aktuellen Position, seit 4.5.0 zusätzlich per Fahrtrichtung (Bearing) disambiguiert.
+- **Abbiege-Ansagen**: Nah-Ansage kurz vor jedem Manöver, seit 4.6.0 zusätzlich eine frühe Vorankündigung ca. 1 km vor Autobahnausfahrten. Kreisel-Manöver nennen zusätzlich die zu nehmende Ausfahrtnummer (z.B. "3. Ausfahrt") — von OSRM direkt aus der Kreiseltopologie ermittelt, nicht von optionaler OSM-Beschilderung abhängig.
 - **GPS-Simulation & Debug-HUD**: zum Testen ohne echte Fahrt — Route abfahren simulieren, dazu ein eigenes Debug-Overlay über Karte/Kamera mit Standort-/GPS-Kennzahlen (Berechtigungsstatus, letzter Fix, Fehler).
 
 ## Technischer Aufbau

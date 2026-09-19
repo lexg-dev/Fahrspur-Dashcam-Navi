@@ -650,6 +650,9 @@
   let map, meMarker, routeLine, routeSteps = [], nextStepIndex = 0;
   // Für checkRouteProgress(): announcedStepIndex verhindert Mehrfachansagen desselben Schritts (3.9.2).
   let announcedStepIndex = -1;
+  // Analog für die zusätzliche 1-km-Vorankündigung vor Autobahnausfahrten (4.6.0) — separat von
+  // announcedStepIndex, da pro Schritt bis zu zwei Ansagen (Vorwarnung + Nah-Ansage) möglich sind.
+  let preAnnouncedStepIndex = -1;
   // War der aktuelle Manöverpunkt schon einmal nah genug erreicht (3.9.7)? Wird EINMAL pro Schritt
   // gelatcht statt bei jedem GPS-Tick neu verlangt, siehe checkRouteProgress().
   let reachedManeuverPoint = false;
@@ -690,7 +693,7 @@
   ];
   let selectedFormat = null; // wird nach Ermittlung der unterstützten Formate gesetzt
 
-  const APP_VERSION = '4.5.1';
+  const APP_VERSION = '4.6.0';
   document.addEventListener('DOMContentLoaded', () => {
     const tag = document.getElementById('app-version-tag');
     if (tag) tag.textContent = 'v' + APP_VERSION;
@@ -1144,6 +1147,7 @@
     // "Route starten" läuft (Bugfix 3.9.11) — Details siehe CHANGELOG.
     nextStepIndex = 0;
     announcedStepIndex = -1;
+    preAnnouncedStepIndex = -1;
     reachedManeuverPoint = false;
     offRouteStreak = 0; rerouteSearchIndex = 0;
     simActivatedIsNavigating = !isNavigating;
@@ -1753,6 +1757,7 @@
     routeSteps = mergeTrivialStraightSteps(route.legs[0].steps);
     nextStepIndex = 0;
     announcedStepIndex = -1;
+    preAnnouncedStepIndex = -1;
     reachedManeuverPoint = false;
     rebuildGeomForCurrentSegment();
     // Rückwärts durchlaufen und je Step die Summe von Distanz/Dauer ALLER folgenden Steps
@@ -2103,6 +2108,8 @@
     const destEl = el('turn-destinations');
     const destParts = [];
     if (showDestinations) {
+      const raExit = roundaboutExitLabel(step.maneuver); // 4.6.0
+      if (raExit) destParts.push(raExit);
       if (step.exits) destParts.push(`Ausfahrt ${step.exits}`);
       if (step.destinations) destParts.push(step.destinations.replace(/;/g, ', '));
     }
@@ -2155,6 +2162,18 @@
     return 'Weiterfahren';
   }
 
+  // 4.6.0: Kreisel-Ausfahrtnummer (z.B. "3. Ausfahrt"). Anders als die Autobahn-Ausfahrtnummer
+  // (step.exits, siehe showStep()) stammt maneuver.exit NICHT aus optionalen OSM-Beschilderungs-Tags,
+  // sondern wird von OSRM selbst aus der Kreisel-Topologie gezählt (wie viele Abzweigungen liegen
+  // vor der zu nehmenden) — deshalb praktisch immer vorhanden, sobald überhaupt ein Kreisel-Manöver
+  // vorliegt, im Gegensatz zur Autobahn-Ausfahrtnummer.
+  function roundaboutExitLabel(man){
+    const t = man.type;
+    const isRoundabout = t === 'roundabout' || t === 'rotary' || t === 'exit roundabout' || t === 'exit rotary';
+    if (isRoundabout && typeof man.exit === 'number') return man.exit + '. Ausfahrt';
+    return null;
+  }
+
   function distMeters(a, b){
     const R = 6371000, toRad = d => d * Math.PI / 180;
     const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
@@ -2165,6 +2184,11 @@
   // Siehe checkRouteProgress(): Sprachansage-Vorwarnzeit, Schwelle für "nah genug dran", und
   // Toleranz/Mindest-Winkel für den Richtungs-Abgleich.
   const ANNOUNCE_DIST_M = 40, ARRIVE_DIST_M = 15;
+  // 4.6.0: zusätzliche frühe Vorankündigung vor Autobahnausfahrten ("off ramp") — die normale
+  // ANNOUNCE_DIST_M-Ansage (40 m) kommt bei Autobahntempo viel zu spät, um sich noch einzuordnen.
+  // Nur für "off ramp" (echte Autobahnausfahrt), nicht für jedes Manöver — sonst würde z.B. jede
+  // normale Innerorts-Abbiegung 1 km vorher unnötig zweimal angesagt.
+  const PRE_ANNOUNCE_DIST_M = 1000;
   const HEADING_TOLERANCE_DEG = 40; // wie nah das aktuelle Heading an bearing_after liegen muss
   const MIN_BEARING_DELTA_DEG = 30; // ab welcher Kursänderung ein Manöver überhaupt "abbiegt"
   // Notbremse (3.9.7): War der Manöverpunkt einmal erreicht, aber das Heading kommt nie in
@@ -2265,9 +2289,20 @@
     if (showLaneGuidance) updateLaneGuidanceVisibility(d); // 4.3.0: nur nah an der Verzweigung einblenden
     updateTurnBannerDirection(d); // 4.4.0: bei sanften Manövern (Fork/leicht links/rechts) ebenso erst nah an der Verzweigung die tatsächliche Richtung zeigen
 
+    // 4.6.0: zusätzliche frühe Vorankündigung ~1 km vor Autobahnausfahrten (separat von der
+    // normalen Nah-Ansage unten) — nur für "off ramp", siehe PRE_ANNOUNCE_DIST_M oben.
+    if (step.maneuver.type === 'off ramp' && nextStepIndex !== preAnnouncedStepIndex
+        && d < PRE_ANNOUNCE_DIST_M && d >= ANNOUNCE_DIST_M) {
+      speak('In einem Kilometer ' + verbFor(step.maneuver) + (step.exits && showDestinations ? ', Ausfahrt ' + step.exits : ''));
+      preAnnouncedStepIndex = nextStepIndex;
+    }
+
     // Sprachansage mit Vorwarnzeit — pro Schritt nur einmal.
     if (nextStepIndex !== announcedStepIndex && d < ANNOUNCE_DIST_M) {
-      speak(verbFor(step.maneuver) + (step.name || step.ref ? ' auf ' + (step.name || step.ref) : '') + (step.exits && showDestinations ? ', Ausfahrt ' + step.exits : ''));
+      const raExit = roundaboutExitLabel(step.maneuver); // 4.6.0
+      speak(verbFor(step.maneuver) + (step.name || step.ref ? ' auf ' + (step.name || step.ref) : '')
+        + (raExit && showDestinations ? ', ' + raExit : '')
+        + (step.exits && showDestinations ? ', Ausfahrt ' + step.exits : ''));
       announcedStepIndex = nextStepIndex;
     }
 
@@ -2285,6 +2320,7 @@
     if (arrived) {
       nextStepIndex++;
       announcedStepIndex = -1;
+      preAnnouncedStepIndex = -1;
       reachedManeuverPoint = false;
       if (nextStepIndex < routeSteps.length) {
         rebuildGeomForCurrentSegment();
@@ -2339,6 +2375,7 @@
     if (routeLine) removeRouteLine();
     routeSteps = []; nextStepIndex = 0;
     announcedStepIndex = -1;
+    preAnnouncedStepIndex = -1;
     reachedManeuverPoint = false;
     stepRemainingDistAfter = []; stepRemainingDurationAfter = [];
     currentStepGeomPts = null; currentStepGeomCum = null; currentStepGeomTotal = 0; lastStepGeomCum = 0; // 3.9.9/3.9.11
